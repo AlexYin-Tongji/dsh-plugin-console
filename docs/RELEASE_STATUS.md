@@ -25,7 +25,7 @@ Status: **release candidate; repository metadata is final, awaiting merge/tag/pu
 - One live npm plugin and one GitHub-only plugin passed artifact verification.
 - The active local Web profile is linked to `dsh-plugin-console`; a DSH restart is still required to load the new client module.
 - MIT attribution and third-party notices are included.
-- CI, tag-driven npm provenance publication, Dependabot, issue forms, contribution guidance, security policy, and release documentation are present.
+- CI, tag-driven npm provenance publication, issue forms, contribution guidance, security policy, and release documentation are present; Dependabot is intentionally disabled.
 
 ## Pending Publication
 
