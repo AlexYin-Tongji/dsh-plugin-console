@@ -2,13 +2,17 @@
 
 Branch: `release/v0.1.0`
 
-Base commit: `be9dae8` (`feat: add DSH Plugin Console`)
+Repository: https://github.com/AlexYin-Tongji/dsh-plugin-console
 
-Status: **release candidate; waiting for the final GitHub repository URL**
+Base branch: `main` (`feat: add DSH Plugin Console`)
+
+Status: **release candidate; repository metadata is final, awaiting merge/tag/publication**
 
 ## Completed
 
 - Package and product renamed consistently to `dsh-plugin-console` / DSH Plugin Console.
+- GitHub repository, homepage, issue, security-advisory, and badge URLs are configured.
+- npm author metadata is `AlexYin-Tongji`; Git commits retain the authorized local identity `alex <yinwy@seer-robotics.ai>`.
 - DSH `0.1.0-rc.6` bundle and Web client contracts are pinned.
 - Host and client build artifacts are committed.
 - Strict TypeScript checking passes.
@@ -22,17 +26,13 @@ Status: **release candidate; waiting for the final GitHub repository URL**
 - MIT attribution and third-party notices are included.
 - CI, tag-driven npm provenance publication, Dependabot, issue forms, contribution guidance, security policy, and release documentation are present.
 
-## Pending Repository URL
+## Pending Publication
 
-After the GitHub repository is created:
+1. Push `main` and `release/v0.1.0` to `origin`.
+2. Enable GitHub Actions and private vulnerability reporting.
+3. Create the GitHub `npm` environment and configure `NPM_TOKEN` (or npm trusted publishing).
+4. Review and merge `release/v0.1.0` into `main`.
+5. Create annotated tag `v0.1.0`; the Release workflow will verify and publish npm provenance.
+6. Create the GitHub Release and submit the plugin to the community catalog.
 
-1. Add `repository`, `homepage`, and `bugs` to `package.json`.
-2. Add the Git remote as `origin`.
-3. Replace this status with the final repository URL and commit SHA.
-4. Add the GitHub private security-advisory link to the issue-template config.
-5. Run `pnpm run release:verify` and `npm pack --dry-run` again.
-6. Commit the metadata on this branch and push `main` plus `release/v0.1.0`.
-7. Merge the release branch, create annotated tag `v0.1.0`, and let the Release workflow publish npm provenance.
-8. Create the GitHub Release and submit the plugin to the community catalog.
-
-Do not create or push `v0.1.0` before the repository metadata is final.
+Do not create or push `v0.1.0` before npm publication credentials are configured.

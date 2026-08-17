@@ -2,9 +2,9 @@
 
 ## One-Time Repository Setup
 
-1. Create the GitHub repository `dsh-plugin-console`.
-2. Add the remote as `origin`.
-3. Add `repository`, `homepage`, and `bugs` fields to `package.json` using the final URL.
+1. Repository: `https://github.com/AlexYin-Tongji/dsh-plugin-console`.
+2. Add this repository as the Git remote `origin`.
+3. Verify `repository`, `homepage`, and `bugs` in `package.json` before every release.
 4. Enable GitHub Actions and private vulnerability reporting.
 5. Create an npm automation token and store it as the GitHub Actions secret `NPM_TOKEN`.
 6. Add repository topics: `dsh-plugin`, `deepseek-harness`, `plugin-manager`, and `dsh-category-market`.
