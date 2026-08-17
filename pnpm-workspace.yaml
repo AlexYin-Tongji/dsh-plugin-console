@@ -1,0 +1,9 @@
+packages:
+  - .
+
+nodeLinker: hoisted
+autoInstallPeers: false
+
+# Keep third-party lifecycle scripts disabled by default during development.
+allowBuilds:
+  esbuild: false

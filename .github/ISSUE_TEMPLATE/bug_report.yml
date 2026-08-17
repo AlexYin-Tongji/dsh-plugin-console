@@ -1,0 +1,37 @@
+name: Bug report
+description: Report a reproducible DSH Plugin Console problem
+title: '[Bug] '
+labels: [bug]
+body:
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: DSH Plugin Console, DSH, Node.js, and pnpm versions
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Catalog sync or verification
+        - Installed plugin inventory
+        - Install, update, or remove
+        - Web interface
+        - Packaging or startup
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Minimal steps and the expected/actual behavior. Remove credentials and private paths.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized diagnostics
+      render: shell

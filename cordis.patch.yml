@@ -1,0 +1,11 @@
+- insert:
+    - id: plugin-console
+      name: dsh-plugin-console
+      config:
+        catalogUrl: !!js process.env.DSH_PLUGIN_CONSOLE_CATALOG_URL ?? 'https://awesome-dsh-plugin.com/plugins.json'
+        cacheMaxAgeMs: 172800000
+        requestTimeoutMs: 15000
+        maxCatalogBytes: 5000000
+        maxReadmeBytes: 262144
+        operationTimeoutMs: 300000
+        dshBin: !!js process.env.DSH_PLUGIN_CONSOLE_DSH_BIN ?? 'dsh'

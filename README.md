@@ -1,0 +1,145 @@
+# DSH Plugin Console
+
+`dsh-plugin-console` 是一个可安装到 DeepSeek Harness Web profile 的插件管理器：它把社区目录、当前 profile 的包清单和 Loader 运行态放在一个 Settings 标签页里，并通过官方 `dsh plugin` 命令完成安装、更新和删除。
+
+## 已实现
+
+- **插件商店**：默认同步 [awesome-dsh-plugin](https://awesome-dsh-plugin.com/plugins.json)，支持搜索、分类、分页和本地 last-known-good 缓存。
+- **安装前验证**：npm 包检查合法 SemVer、repository、HTTPS tarball、SHA-512 integrity、`dsh.bundle.patch` 和生命周期脚本；GitHub 包固定到 40 位 commit，并确认 `package.json` 与声明的 patch 文件存在。
+- **已安装清单**：读取当前 profile 的 direct dependencies、bundle 顺序、解析后的 package manifest、Loader entry/Fiber phase 和 Web client 能力。
+- **使用说明**：优先读取已安装包内的 `README.zh.md` / `README.md`，使用 DSH 原生 `MarkdownText` 展示；raw HTML、相对链接和危险协议由宿主 renderer 禁用。
+- **快捷更新**：社区目录中的包按已验证 artifact 更新；目录外 npm 包只有在同名、同 repository、合法升级版本和 integrity 都成立时才可更新，并在确认页单独警告。
+- **快捷删除**：只允许删除 direct dependency，系统 bundle 受保护；删除包不会擅自删除包创建的数据。
+- **变更确认**：所有写操作先生成 5 分钟有效的 plan；执行前重新校验 profile 指纹、当前包状态和 artifact integrity，同一时间只允许一个变更。失败时恢复元数据、清理 profile `node_modules`，再按恢复后的 lockfile 做 frozen reinstall。
+- **重启提示**：变更由 pnpm/profile manifest 持久化，当前 Loader 不会被伪装成已更新，页面会明确显示重启后生效。
+
+## 安装
+
+在 DSH 安装所在环境运行：
+
+```sh
+# npm 发布版
+dsh plugin --profile web add dsh-plugin-console
+
+# 本地源码检出目录
+dsh plugin --profile web add .
+```
+
+验证 bundle 层：
+
+```sh
+dsh --profile web --dump-config
+```
+
+安装或更新插件后需要重启 `dsh web`，因为 Web client module roster 在进程启动时扫描 profile 包。
+
+## 配置
+
+bundle 默认配置位于 `cordis.patch.yml`。可在 profile 的 `cordis.patch.yml` 中覆盖完整行配置，注意 DSH patch 对 `config` 是整段替换：
+
+```yaml
+- id: plugin-console
+  config:
+    catalogUrl: https://awesome-dsh-plugin.com/plugins.json
+    cacheMaxAgeMs: 172800000
+    requestTimeoutMs: 15000
+    maxCatalogBytes: 5000000
+    maxReadmeBytes: 262144
+    operationTimeoutMs: 300000
+    dshBin: dsh
+```
+
+也支持环境变量：
+
+- `DSH_PLUGIN_CONSOLE_CATALOG_URL`
+- `DSH_PLUGIN_CONSOLE_DSH_BIN`
+
+目录缓存写入 `$DSH_HOME/cache/plugin-console/catalog.json`。上游不可用时保留最后一次有效目录，不会用空响应覆盖缓存。`catalogUrl` 必须是绝对 HTTPS URL。`dshBin` / `DSH_PLUGIN_CONSOLE_DSH_BIN` 是管理员级配置，会被作为本机可执行文件启动，不应接受不可信输入。
+
+## 安全边界
+
+DSH 插件是 Host 进程中的受信任代码，不是隔离的浏览器扩展。这个管理器遵循以下边界：
+
+1. 社区 feed 只用于发现，不执行 feed 中的 `install` 字符串。
+2. 浏览器 API 只有 typed `install`、`update`、`remove`，没有任意 pnpm argv 或 shell 接口。
+3. 子进程使用参数数组和 `shell: false` 调用 `dsh plugin`。
+4. 安装、更新固定传 `--ignore-scripts`；需要构建脚本的包不会被静默放行。
+5. GitHub 来源必须固定到 commit；npm 来源使用精确版本，并在安装后核对 lockfile integrity。
+6. pnpm 成功后还会运行 `dsh --profile <name> --dump-config`；版本、bundle、integrity 或 composition 任一不匹配都视为失败并进入恢复。
+7. API 仅接受同源 POST；变更请求还必须来自 loopback。profile 路径从 Loader `baseUrl` 推导并限制在 `$DSH_HOME/profiles` 下。
+8. README 使用 DSH 自带的不可信 Markdown renderer；不会在 client bundle 中引入 Node builtin 或另一套 Markdown runtime。
+9. 删除只改变 package-manager/profile 状态，不清理未知的插件数据目录。
+
+“已验证”只表示 manifest 和 artifact 结构符合 DSH 安装约定，不表示作者或代码经过安全背书。
+
+## 开发
+
+要求 Node.js 22.19+ 或 24+、pnpm 10+。Host/Client peer contract 固定到已验证的 DSH `0.1.0-rc.6`：
+
+```sh
+pnpm install
+pnpm run typecheck
+pnpm run test
+pnpm run build
+```
+
+如果本机 pnpm 因 `approve-builds` 阻止开发依赖的安装脚本，可以直接运行已安装的工具：
+
+```sh
+node node_modules/typescript/bin/tsc --noEmit
+node node_modules/vitest/vitest.mjs run
+node node_modules/tsdown/dist/run.mjs -c tsdown.config.ts
+```
+
+包结构：
+
+```text
+src/catalog.ts                         社区 feed、缓存、npm/GitHub 验证
+src/profile.ts                         profile manifest、包清单、Loader 运行态
+src/operations.ts                      plan、串行 dsh CLI 变更、失败恢复
+src/index.ts                           Host API /api/plugin-console
+src/client/index.ts                    Web Settings slot 注册
+src/client/PluginManageSettingsTab.tsx 商店、已安装、详情和确认 UI
+src/client/*.module.css                主题变量和响应式布局
+tests/                                 目录、profile、事务、client runtime 与构建契约测试
+```
+
+贡献、安全与发布说明：
+
+- [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- [`SECURITY.md`](SECURITY.md)
+- [`CHANGELOG.md`](CHANGELOG.md)
+- [`docs/RELEASING.md`](docs/RELEASING.md)
+
+## DSH 插件开发原则
+
+这个包遵循 DSH 官方的 Cordis 方式：插件通过 `apply(ctx)` 注册能力，依赖通过 `inject` 声明，外部资源通过 `ctx.effect()` 回收；持久化 profile 由 `dsh plugin` / pnpm 负责，Loader 只负责当前进程生命周期。
+
+官方参考：
+
+- [DeepSeek Harness architecture](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md)
+- [First plugin tutorial](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/index.md)
+- [Package and install a plugin](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md)
+- [Extension cookbook](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cookbook/extension-cookbook.md)
+
+## 参考与致谢
+
+本项目的主体业务实现为独立编写，但使用或改写了以下 MIT 项目的接口与实现模式：
+
+- [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)：bundle/profile、Cordis 生命周期、Loader/Fiber 投影、Web client module 与 Settings slot 契约。
+- [DSH Plugin Marketplace](https://github.com/w2112515/dsh-plugin-marketplace)：双端外部 bundle、同源私有 API、短时 review plan / recovery 架构，以及 `tsdown.config.ts` 的 client envelope 与 CSS-module bundler。构建配置是直接改写，不只是产品灵感。
+
+以下项目仅作为产品和交互行为参考，没有直接并入其源码：
+
+- [dshmarket](https://github.com/dsh-market/dsh-market)
+- [dsh-plugin-store / Plugin Hub](https://github.com/yunhuantian/dsh-plugin-store)
+
+完整版权、revision 和 MIT notice 见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+
+## 关于 AI 摘要
+
+目录同步和 artifact 验证使用结构化 metadata，不把 AI 输出当成安装依据。后续可以增加一个只读的 AI 摘要层，用于从已验证 README 生成“能做什么 / 怎么用 / 注意事项”，但摘要必须标注为模型生成，安装目标、版本和风险仍以 Host 的 manifest 验证为准。
+
+## License
+
+MIT
