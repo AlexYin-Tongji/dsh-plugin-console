@@ -6,6 +6,15 @@
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "license": "MIT",
+  "author": "AlexYin-Tongji",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AlexYin-Tongji/dsh-plugin-console.git"
+  },
+  "homepage": "https://github.com/AlexYin-Tongji/dsh-plugin-console#readme",
+  "bugs": {
+    "url": "https://github.com/AlexYin-Tongji/dsh-plugin-console/issues"
+  },
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
     "pnpm": ">=10"

@@ -1,5 +1,9 @@
 # DSH Plugin Console
 
+[![CI](https://github.com/AlexYin-Tongji/dsh-plugin-console/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AlexYin-Tongji/dsh-plugin-console/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/dsh-plugin-console.svg)](https://www.npmjs.com/package/dsh-plugin-console)
+[![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 `dsh-plugin-console` 是一个可安装到 DeepSeek Harness Web profile 的插件管理器：它把社区目录、当前 profile 的包清单和 Loader 运行态放在一个 Settings 标签页里，并通过官方 `dsh plugin` 命令完成安装、更新和删除。
 
 ## 已实现
