@@ -69,7 +69,7 @@ interface CatalogPluginDetail extends CatalogPluginSummary {
   readonly readmeSource: string | null;
   readonly warnings: readonly string[];
 }
-type InstalledState = 'active' | 'installed-inactive' | 'pending-install' | 'pending-update' | 'pending-removal';
+type InstalledState = 'active' | 'paused' | 'partially-paused' | 'installed-inactive' | 'pending-install' | 'pending-update' | 'pending-removal';
 interface RuntimeEntrySummary {
   readonly entryId: string;
   readonly enabled: boolean;
@@ -107,6 +107,7 @@ interface ManagerCapabilities {
   readonly profileName: string;
   readonly profileWritable: boolean;
   readonly dshAvailable: boolean;
+  readonly pnpmAvailable: boolean;
   readonly busy: boolean;
   readonly message: string | null;
 }
@@ -115,7 +116,7 @@ interface BootstrapResponse {
   readonly installed: readonly InstalledPluginSummary[];
   readonly capabilities: ManagerCapabilities;
 }
-type OperationAction = 'install' | 'update' | 'remove';
+type OperationAction = 'install' | 'update' | 'remove' | 'pause' | 'resume';
 type OperationWarning = 'trusted-code' | 'restart-required' | 'scripts-disabled' | 'compatibility-unknown' | 'remove-data-kept' | 'self-removal' | 'uncatalogued-update';
 interface OperationPlanRequest {
   readonly action: OperationAction;
@@ -162,4 +163,4 @@ interface ApiFailure {
 }
 //#endregion
 export { VerificationState as C, UiLocale as S, OperationPlanRequest as _, BootstrapResponse as a, RuntimeEntrySummary as b, CatalogPluginDetail as c, InstalledPluginDetail as d, InstalledPluginSummary as f, OperationPlan as g, OperationAction as h, ArtifactManifestSummary as i, CatalogPluginSummary as l, ManagerCapabilities as m, ApiSuccess as n, CatalogListRequest as o, InstalledState as p, ArtifactKind as r, CatalogListResponse as s, ApiFailure as t, CatalogStatus as u, OperationResult as v, RuntimePhase as x, OperationWarning as y };
-//# sourceMappingURL=types-C9apLrl4.d.ts.map
+//# sourceMappingURL=types-CEotyhPd.d.ts.map

@@ -72,6 +72,8 @@ export interface CatalogPluginDetail extends CatalogPluginSummary {
 
 export type InstalledState =
   | 'active'
+  | 'paused'
+  | 'partially-paused'
   | 'installed-inactive'
   | 'pending-install'
   | 'pending-update'
@@ -117,6 +119,7 @@ export interface ManagerCapabilities {
   readonly profileName: string
   readonly profileWritable: boolean
   readonly dshAvailable: boolean
+  readonly pnpmAvailable: boolean
   readonly busy: boolean
   readonly message: string | null
 }
@@ -127,7 +130,7 @@ export interface BootstrapResponse {
   readonly capabilities: ManagerCapabilities
 }
 
-export type OperationAction = 'install' | 'update' | 'remove'
+export type OperationAction = 'install' | 'update' | 'remove' | 'pause' | 'resume'
 export type OperationWarning =
   | 'trusted-code'
   | 'restart-required'

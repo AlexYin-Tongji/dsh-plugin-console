@@ -78,7 +78,8 @@ function listRequest(value: unknown): CatalogListRequest {
 }
 
 function planRequest(value: unknown): OperationPlanRequest {
-  if (!isRecord(value) || (value.action !== 'install' && value.action !== 'update' && value.action !== 'remove')) {
+  if (!isRecord(value) || (value.action !== 'install' && value.action !== 'update' && value.action !== 'remove'
+    && value.action !== 'pause' && value.action !== 'resume')) {
     throw new ApiFailure(400, 'request-invalid', 'Invalid operation action.')
   }
   const catalogId = value.catalogId === undefined ? undefined : typeof value.catalogId === 'string' ? value.catalogId : null

@@ -25,6 +25,16 @@ const CACHE_SCHEMA = 1
 const INSPECTION_CACHE_MS = 10 * 60 * 1000
 const MAX_CATALOG_ITEMS = 5000
 const LIFECYCLE_SCRIPT_NAMES = ['preinstall', 'install', 'postinstall', 'prepare'] as const
+const README_NAMES: Record<UiLocale, readonly string[]> = {
+  zh: [
+    'README.zh.md', 'README.zh-CN.md', 'README.zh.markdown', 'README.zh.rst', 'README.zh.txt',
+    'README.md', 'README.markdown', 'README.mdx', 'README.rst', 'README.txt', 'README',
+  ],
+  en: [
+    'README.md', 'README.en.md', 'README.markdown', 'README.en.markdown', 'README.mdx',
+    'README.rst', 'README.txt', 'README',
+  ],
+}
 const NPM_PACKAGE = /^(?:@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*|[a-z0-9][a-z0-9._~-]*)$/i
 const NPM_INTEGRITY = /^sha512-[A-Za-z0-9+/]+={0,2}$/
 
@@ -255,10 +265,7 @@ async function fetchReadme(
   signal: AbortSignal,
   maxBytes: number,
 ): Promise<{ text: string | null; source: string | null }> {
-  const candidates = locale === 'zh'
-    ? ['README.zh.md', 'README.zh-CN.md', 'README.md']
-    : ['README.md', 'README.en.md']
-  for (const file of candidates) {
+  for (const file of README_NAMES[locale]) {
     const encodedRef = ref.split('/').map(segment => encodeURIComponent(segment)).join('/')
     const url = `https://raw.githubusercontent.com/${fullName}/${encodedRef}/${file}`
     try {

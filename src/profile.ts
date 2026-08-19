@@ -11,6 +11,7 @@ import { readProfileManifest, type ProfileManifest } from '@deepseek-ai/dsh-app-
 import type { Context, FiberState } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import semver from 'semver'
+import { isMap, isSeq, parseDocument, type ScalarTag, type YAMLMap, type YAMLSeq } from 'yaml'
 import type {
   InstalledPluginDetail,
   InstalledPluginSummary,
@@ -19,7 +20,7 @@ import type {
   RuntimePhase,
   UiLocale,
 } from './types.ts'
-import { errorMessage, isRecord, normalizeGithubRepository, readTextBounded, stringValue } from './util.ts'
+import { errorMessage, isRecord, normalizeGithubRepository, readTextBounded, stringValue, writeFileAtomic } from './util.ts'
 import type { PluginCatalog } from './catalog.ts'
 
 const PACKAGE_NAME = /^[a-z0-9][a-z0-9._~-]*$/i
@@ -27,7 +28,27 @@ const SCOPED_PACKAGE_NAME = /^@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*$/i
 const MAX_PACKAGE_JSON_BYTES = 512_000
 const NPM_TIMEOUT_MS = 8_000
 const NPM_CACHE_MS = 5 * 60 * 1000
+const MAX_PROFILE_PATCH_BYTES = 1_000_000
 const LIFECYCLE_SCRIPT_NAMES = ['preinstall', 'install', 'postinstall', 'prepare'] as const
+const README_NAMES: Record<UiLocale, readonly string[]> = {
+  zh: [
+    'README.zh.md', 'README.zh-CN.md', 'README.zh.markdown', 'README.zh.rst', 'README.zh.txt',
+    'README.md', 'README.markdown', 'README.mdx', 'README.rst', 'README.txt', 'README',
+  ],
+  en: [
+    'README.md', 'README.en.md', 'README.markdown', 'README.en.markdown', 'README.mdx',
+    'README.rst', 'README.txt', 'README',
+  ],
+}
+
+const JS_EXPRESSION_TAG: ScalarTag = {
+  tag: 'tag:yaml.org,2002:js',
+  identify: (value: unknown): boolean => isRecord(value)
+    && Object.keys(value).length === 1
+    && typeof value.__jsExpr === 'string',
+  resolve: (value: string): Record<string, string> => ({ __jsExpr: value }),
+  stringify: ({ value }): string => isRecord(value) && typeof value.__jsExpr === 'string' ? value.__jsExpr : '',
+}
 
 interface PackageJson {
   readonly name?: unknown
@@ -47,6 +68,11 @@ export interface ProfileRuntime {
   readonly dir: string
   readonly launchDependencies: Readonly<Record<string, string>>
   readonly launchBundles: readonly string[]
+}
+
+export interface PluginActivationTarget {
+  readonly id: string
+  readonly name: string
 }
 
 export interface ProfileManagerOptions {
@@ -117,8 +143,16 @@ function lifecycleScripts(value: unknown): readonly string[] {
   return LIFECYCLE_SCRIPT_NAMES.filter(name => typeof value[name] === 'string')
 }
 
+function bundlePatchPath(value: unknown): string | null {
+  if (!isRecord(value) || !isRecord(value.bundle) || typeof value.bundle.patch !== 'string') return null
+  const raw = value.bundle.patch.startsWith('./') ? value.bundle.patch.slice(2) : value.bundle.patch
+  if (raw.length === 0 || raw.startsWith('/') || raw.includes('\\')) return null
+  const segments = raw.split('/')
+  return segments.some(segment => segment.length === 0 || segment === '.' || segment === '..') ? null : raw
+}
+
 function isBundle(value: unknown): boolean {
-  return isRecord(value) && isRecord(value.bundle) && typeof value.bundle.patch === 'string'
+  return bundlePatchPath(value) !== null
 }
 
 function isWebClient(value: unknown): boolean {
@@ -185,14 +219,33 @@ function packageDsh(value: PackageJson): Record<string, unknown> | null {
   return isRecord(value.dsh) ? value.dsh : null
 }
 
-function runtimeEntries(ctx: Context, packageName: string): readonly RuntimeEntrySummary[] {
-  const entries: RuntimeEntrySummary[] = []
+interface PluginRuntimeEntry {
+  readonly patchId: string
+  readonly name: string
+  readonly summary: RuntimeEntrySummary
+}
+
+function pluginRuntimeEntries(
+  ctx: Context,
+  packageName: string,
+  targets: readonly PluginActivationTarget[] = [],
+): readonly PluginRuntimeEntry[] {
+  const entries: PluginRuntimeEntry[] = []
+  const targetKeys = new Set(targets.map(target => activationKey(target.id, target.name)))
   for (const entry of ctx.loader.entries()) {
-    if (entry.options.group || entry.options.name !== packageName) continue
+    if (entry.options.group) continue
+    const matches = targetKeys.size > 0
+      ? targetKeys.has(activationKey(entry.options.id, entry.options.name))
+      : entry.options.name === packageName
+    if (!matches) continue
     entries.push({
-      entryId: entry.id,
-      enabled: !entry.disabled,
-      phase: entry.fiber === undefined ? null : runtimePhase(entry.fiber.state),
+      patchId: entry.options.id,
+      name: entry.options.name,
+      summary: {
+        entryId: entry.id,
+        enabled: !entry.disabled,
+        phase: entry.fiber === undefined ? null : runtimePhase(entry.fiber.state),
+      },
     })
   }
   return entries
@@ -222,8 +275,7 @@ async function latestNpmVersion(packageName: string, fetchImpl: typeof fetch): P
 }
 
 async function readProfileReadme(root: string, locale: UiLocale, maxBytes: number): Promise<{ text: string | null; file: string | null }> {
-  const names = locale === 'zh' ? ['README.zh.md', 'README.zh-CN.md', 'README.md'] : ['README.md', 'README.en.md']
-  for (const name of names) {
+  for (const name of README_NAMES[locale]) {
     try {
       return { text: await readTextBounded(join(root, name), maxBytes), file: name }
     } catch {
@@ -233,6 +285,73 @@ async function readProfileReadme(root: string, locale: UiLocale, maxBytes: numbe
   return { text: null, file: null }
 }
 
+interface ProfilePatchDocument {
+  readonly document: ReturnType<typeof parseDocument>
+  readonly sequence: YAMLSeq
+}
+
+function activationKey(id: string, name: string): string {
+  return `${id}\0${name}`
+}
+
+function parseProfilePatchDocument(text: string): ProfilePatchDocument {
+  const document = parseDocument(text, { customTags: [JS_EXPRESSION_TAG] })
+  if (document.errors.length > 0) throw document.errors[0]
+  if (!isSeq(document.contents)) throw new Error('Profile patch file must contain a YAML patch list.')
+  return { document, sequence: document.contents }
+}
+
+function collectBundleEntries(sequence: YAMLSeq, targets: Map<string, PluginActivationTarget>): void {
+  for (const item of sequence.items) {
+    if (!isMap(item)) continue
+    const group = item.get('group') === true
+    const id = item.get('id')
+    const name = item.get('name')
+    if (!group && typeof id === 'string' && typeof name === 'string') {
+      targets.set(activationKey(id, name), { id, name })
+    }
+    const config = item.get('config')
+    if (group && isSeq(config)) collectBundleEntries(config, targets)
+  }
+}
+
+async function readBundleActivationTargets(root: string, dsh: Record<string, unknown> | null): Promise<readonly PluginActivationTarget[]> {
+  const relative = bundlePatchPath(dsh)
+  if (relative === null) return []
+  const { sequence } = parseProfilePatchDocument(await readTextBounded(join(root, relative), MAX_PROFILE_PATCH_BYTES))
+  const targets = new Map<string, PluginActivationTarget>()
+  for (const patch of sequence.items) {
+    if (!isMap(patch)) continue
+    const insert = patch.get('insert')
+    if (isSeq(insert)) collectBundleEntries(insert, targets)
+  }
+  return [...targets.values()]
+}
+
+async function readProfilePatchDocument(path: string): Promise<ProfilePatchDocument> {
+  try {
+    return parseProfilePatchDocument(await readTextBounded(path, MAX_PROFILE_PATCH_BYTES))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return parseProfilePatchDocument('[]\n')
+    throw error
+  }
+}
+
+async function activationOverrides(path: string): Promise<ReadonlyMap<string, boolean>> {
+  const values = new Map<string, boolean>()
+  const { sequence } = await readProfilePatchDocument(path)
+  for (const patch of sequence.items) {
+    if (!isMap(patch) || patch.get('insert') !== undefined) continue
+    const id = patch.get('id')
+    const name = patch.get('name')
+    const disabled = patch.get('disabled')
+    if (typeof id === 'string' && typeof name === 'string' && typeof disabled === 'boolean') {
+      values.set(activationKey(id, name), disabled)
+    }
+  }
+  return values
+}
+
 async function writable(path: string): Promise<boolean> {
   try {
     await access(path, constants.W_OK)
@@ -240,6 +359,15 @@ async function writable(path: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+async function writableIfPresent(path: string): Promise<boolean> {
+  try {
+    await access(path, constants.F_OK)
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT'
+  }
+  return writable(path)
 }
 
 async function commandAvailable(command: string): Promise<boolean> {
@@ -313,26 +441,34 @@ export class ProfileManager {
   async capabilities(): Promise<ManagerCapabilities> {
     const profileWritable = await Promise.all([
       writable(this.runtime.dir),
-      writable(join(this.runtime.dir, 'package.json')),
-      writable(join(this.runtime.dir, 'pnpm-workspace.yaml')),
+      writableIfPresent(join(this.runtime.dir, 'package.json')),
+      writableIfPresent(join(this.runtime.dir, 'pnpm-lock.yaml')),
+      writableIfPresent(join(this.runtime.dir, 'pnpm-workspace.yaml')),
+      writableIfPresent(profilePatchPath(this.runtime)),
     ]).then(values => values.every(Boolean))
-    const dshAvailable = await commandAvailable(this.dshBin)
+    const [dshAvailable, pnpmAvailable] = await Promise.all([
+      commandAvailable(this.dshBin),
+      commandAvailable('pnpm'),
+    ])
     return {
       profileName: this.runtime.profileName,
       profileWritable,
       dshAvailable,
+      pnpmAvailable,
       busy: this.busy,
       message: !profileWritable
         ? 'The active DSH profile is not writable.'
         : !dshAvailable
           ? `Cannot execute ${this.dshBin}; install DSH or configure dshBin.`
-          : null,
+          : !pnpmAvailable
+            ? 'Cannot execute pnpm; install pnpm or expose it on PATH.'
+            : null,
     }
   }
 
   fingerprint(): string {
     const hash = createHash('sha256')
-    for (const filename of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']) {
+    for (const filename of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.patch.yml']) {
       hash.update(filename).update('\0')
       try {
         hash.update(readFileSync(join(this.runtime.dir, filename)))
@@ -349,6 +485,10 @@ export class ProfileManager {
     const manifest = readProfileManifest('dsh-plugin-console', this.runtime.dir)
     const dependencies = manifest.dependencies ?? {}
     const bundles = manifest.dsh?.profile?.bundles ?? []
+    const overrides = await activationOverrides(profilePatchPath(this.runtime)).catch(error => {
+      this.ctx.logger?.warn(error instanceof Error ? error : new Error(errorMessage(error)))
+      return new Map<string, boolean>()
+    })
     const names = [...new Set([...Object.keys(dependencies), ...bundles])].filter(packageNameValid).sort()
     const rows = await mapWithConcurrency(names, 4, async packageName => {
       const requestedSpec = dependencies[packageName] ?? null
@@ -358,6 +498,31 @@ export class ProfileManager {
       const client = dsh !== null && isWebClient(dsh)
       const activeAtLaunch = this.runtime.launchBundles.includes(packageName)
       const activeAfterRestart = bundles.includes(packageName)
+      const bundleTargets = packageData === null
+        ? []
+        : await readBundleActivationTargets(packageData.root, dsh).catch(error => {
+            this.ctx.logger?.warn(error instanceof Error ? error : new Error(errorMessage(error)))
+            return []
+          })
+      const pluginEntries = pluginRuntimeEntries(this.ctx, packageName, bundleTargets)
+      const entries = pluginEntries.map(entry => entry.summary)
+      const keyCounts = pluginEntries.reduce((counts, entry) => {
+        const key = activationKey(entry.patchId, entry.name)
+        counts.set(key, (counts.get(key) ?? 0) + 1)
+        return counts
+      }, new Map<string, number>())
+      const persistedState = launchState(requestedSpec, activeAtLaunch, activeAfterRestart, this.runtime.launchDependencies[packageName])
+      const disabledEntries = pluginEntries.map(entry => {
+        const key = activationKey(entry.patchId, entry.name)
+        return keyCounts.get(key) === 1 ? overrides.get(key) ?? !entry.summary.enabled : !entry.summary.enabled
+      })
+      const state = persistedState === 'active' && disabledEntries.length > 0
+        ? disabledEntries.every(Boolean)
+          ? 'paused'
+          : disabledEntries.some(Boolean)
+            ? 'partially-paused'
+            : persistedState
+        : persistedState
       const baseRow: InstalledPluginSummary = {
         packageName,
         requestedSpec,
@@ -373,8 +538,8 @@ export class ProfileManager {
         client,
         activeAtLaunch,
         activeAfterRestart,
-        state: launchState(requestedSpec, activeAtLaunch, activeAfterRestart, this.runtime.launchDependencies[packageName]),
-        runtimeEntries: runtimeEntries(this.ctx, packageName),
+        state,
+        runtimeEntries: entries,
         latestVersion: null,
         updateAvailable: false,
         updateCheckError: null,
@@ -440,6 +605,35 @@ export class ProfileManager {
     }
   }
 
+  async setPluginPaused(packageName: string, paused: boolean): Promise<readonly PluginActivationTarget[]> {
+    const packageData = await readPackageJson(this.runtime.dir, packageName)
+    const dsh = packageData === null ? null : packageDsh(packageData.value)
+    const declaredTargets = packageData === null ? [] : await readBundleActivationTargets(packageData.root, dsh)
+    const targets = pluginRuntimeEntries(this.ctx, packageName, declaredTargets)
+      .map(entry => ({ id: entry.patchId, name: entry.name }))
+    const uniqueTargets = new Map<string, PluginActivationTarget>()
+    for (const target of targets) {
+      const key = activationKey(target.id, target.name)
+      if (uniqueTargets.has(key)) throw new Error(`Loader entry ${target.id} is ambiguous and cannot be paused safely.`)
+      uniqueTargets.set(key, target)
+    }
+    if (uniqueTargets.size === 0) throw new Error('The plugin has no Loader entries that can be paused.')
+
+    const path = profilePatchPath(this.runtime)
+    const { document, sequence } = await readProfilePatchDocument(path)
+    for (const target of uniqueTargets.values()) {
+      const matching = sequence.items.filter((patch): patch is YAMLMap => isMap(patch)
+        && patch.get('insert') === undefined
+        && patch.get('id') === target.id
+        && patch.get('name') === target.name)
+      const patch = matching.at(-1)
+      if (patch === undefined) sequence.items.push(document.createNode({ id: target.id, name: target.name, disabled: paused }))
+      else patch.set('disabled', paused)
+    }
+    await writeFileAtomic(path, String(document))
+    return [...uniqueTargets.values()]
+  }
+
   async currentManifest(): Promise<ProfileManifest> {
     return readProfileManifest('dsh-plugin-console', this.runtime.dir)
   }
@@ -459,6 +653,10 @@ export function profileLockPath(runtime: ProfileRuntime): string {
 
 export function profileWorkspacePath(runtime: ProfileRuntime): string {
   return join(runtime.dir, 'pnpm-workspace.yaml')
+}
+
+export function profilePatchPath(runtime: ProfileRuntime): string {
+  return join(runtime.dir, 'cordis.patch.yml')
 }
 
 export function packageInstallPath(runtime: ProfileRuntime, packageName: string): string {

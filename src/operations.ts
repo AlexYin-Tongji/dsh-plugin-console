@@ -9,9 +9,9 @@ import { readFile, rm, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import semver from 'semver'
-import { parse as parseYaml } from 'yaml'
+import { parse as parseYaml, type ScalarTag } from 'yaml'
 import type { NpmArtifact, PluginCatalog } from './catalog.ts'
-import type { ProfileManager } from './profile.ts'
+import { profilePatchPath, type PluginActivationTarget, type ProfileManager } from './profile.ts'
 import type {
   CatalogPluginDetail,
   InstalledPluginSummary,
@@ -25,7 +25,16 @@ import { errorMessage, isRecord, redactProcessOutput } from './util.ts'
 
 const PLAN_TTL_MS = 5 * 60 * 1000
 const MAX_OUTPUT_CHARS = 24_000
+const MAX_STDOUT_CHARS = 5_000_000
 const PACKAGE_NAME = /^(?:[a-z0-9][a-z0-9._~-]*|@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*)$/i
+const JS_EXPRESSION_TAG: ScalarTag = {
+  tag: 'tag:yaml.org,2002:js',
+  identify: (value: unknown): boolean => isRecord(value)
+    && Object.keys(value).length === 1
+    && typeof value.__jsExpr === 'string',
+  resolve: (value: string): Record<string, string> => ({ __jsExpr: value }),
+  stringify: ({ value }): string => isRecord(value) && typeof value.__jsExpr === 'string' ? value.__jsExpr : '',
+}
 
 interface StoredPlan {
   readonly plan: OperationPlan & { readonly status: 'ready'; readonly planId: string }
@@ -37,6 +46,8 @@ interface CommandResult {
   readonly unavailable: boolean
   readonly timedOut: boolean
   readonly output: string | null
+  readonly stdout?: string | null
+  readonly stdoutTruncated?: boolean
 }
 
 interface FileBackup {
@@ -105,7 +116,9 @@ function command(
   timeoutMs: number,
 ): Promise<CommandResult> {
   return new Promise(resolve => {
-    let output = ''
+    let stdout = ''
+    let stderr = ''
+    let stdoutTruncated = false
     let timedOut = false
     let settled = false
     const child = spawn(executable, [...args], {
@@ -114,12 +127,17 @@ function command(
       env: { ...process.env },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    const append = (chunk: Buffer): void => {
-      output += chunk.toString('utf8')
-      if (output.length > MAX_OUTPUT_CHARS) output = output.slice(-MAX_OUTPUT_CHARS)
-    }
-    child.stdout?.on('data', append)
-    child.stderr?.on('data', append)
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8')
+      if (stdout.length > MAX_STDOUT_CHARS) {
+        stdout = stdout.slice(-MAX_STDOUT_CHARS)
+        stdoutTruncated = true
+      }
+    })
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8')
+      if (stderr.length > MAX_OUTPUT_CHARS) stderr = stderr.slice(-MAX_OUTPUT_CHARS)
+    })
     const timer = setTimeout(() => {
       timedOut = true
       child.kill('SIGTERM')
@@ -129,7 +147,12 @@ function command(
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolve({ ...result, output: redactProcessOutput(output) })
+      resolve({
+        ...result,
+        stdout: stdout.trim().length === 0 ? null : stdout,
+        stdoutTruncated,
+        output: redactProcessOutput(`${stdout}\n${stderr}`),
+      })
     }
     child.once('error', error => finish({ code: 1, unavailable: (error as NodeJS.ErrnoException).code === 'ENOENT', timedOut, output: null }))
     child.once('exit', code => finish({ code, unavailable: false, timedOut, output: null }))
@@ -152,14 +175,69 @@ async function restoreFiles(files: readonly FileBackup[]): Promise<void> {
   }
 }
 
+async function backupFilesChanged(files: readonly FileBackup[]): Promise<boolean> {
+  for (const file of files) {
+    try {
+      const current = await readFile(file.path, 'utf8')
+      if (file.content === null || current !== file.content) return true
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || file.content !== null) return true
+    }
+  }
+  return false
+}
+
 async function lockfileHasIntegrity(profileDir: string, packageName: string, version: string, integrity: string): Promise<boolean> {
   try {
     const value: unknown = parseYaml(await readFile(join(profileDir, 'pnpm-lock.yaml'), 'utf8'))
-    if (!isRecord(value) || !isRecord(value.packages)) return false
-    const prefix = `${packageName}@${version}`
-    return Object.entries(value.packages).some(([key, entry]) => {
-      if (key !== prefix && !key.startsWith(`${prefix}(`)) return false
+    if (!isRecord(value)) return false
+    const stores = [value.packages, value.snapshots].filter(isRecord)
+    if (stores.length === 0) return false
+
+    const importer = isRecord(value.importers) && isRecord(value.importers['.']) ? value.importers['.'] : null
+    if (importer === null) return false
+    let reference: string | null = null
+    for (const field of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+      const dependencies = importer[field]
+      if (!isRecord(dependencies) || dependencies[packageName] === undefined) continue
+      const direct = dependencies[packageName]
+      reference = typeof direct === 'string'
+        ? direct
+        : isRecord(direct) && typeof direct.version === 'string'
+          ? direct.version
+          : null
+      break
+    }
+    if (reference === null || (reference !== version && !reference.startsWith(`${version}(`))) return false
+
+    const prefixes = new Set([`${packageName}@${version}`, `${packageName}@${reference}`])
+    return stores.some(store => Object.entries(store).some(([rawKey, entry]) => {
+      const key = rawKey.startsWith('/') ? rawKey.slice(1) : rawKey
+      if (![...prefixes].some(prefix => key === prefix || key.startsWith(`${prefix}(`))) return false
       return isRecord(entry) && isRecord(entry.resolution) && entry.resolution.integrity === integrity
+    }))
+  } catch {
+    return false
+  }
+}
+
+function collectComposedEntries(value: unknown, entries: Record<string, unknown>[]): void {
+  if (!Array.isArray(value)) return
+  for (const item of value) {
+    if (!isRecord(item)) continue
+    entries.push(item)
+    if (item.group === true) collectComposedEntries(item.config, entries)
+  }
+}
+
+function activationDumpMatches(output: string | null | undefined, targets: readonly PluginActivationTarget[], paused: boolean): boolean {
+  if (output === null || output === undefined) return false
+  try {
+    const entries: Record<string, unknown>[] = []
+    collectComposedEntries(parseYaml(output, { customTags: [JS_EXPRESSION_TAG] }), entries)
+    return targets.every(target => {
+      const matching = entries.filter(entry => entry.id === target.id && entry.name === target.name)
+      return matching.length === 1 && matching[0]?.disabled === paused
     })
   } catch {
     return false
@@ -168,11 +246,13 @@ async function lockfileHasIntegrity(profileDir: string, packageName: string, ver
 
 function warningList(detail: Pick<CatalogPluginDetail, 'warnings'>, action: OperationAction): OperationWarning[] {
   const warnings: OperationWarning[] = []
-  if (action !== 'remove') {
+  if (action === 'pause' || action === 'resume') {
+    warnings.push('restart-required')
+  } else if (action === 'remove') {
+    warnings.push('remove-data-kept')
+  } else {
     warnings.push('trusted-code', 'restart-required', 'scripts-disabled')
     if (detail.warnings.includes('dsh-compatibility-not-declared')) warnings.push('compatibility-unknown')
-  } else {
-    warnings.push('remove-data-kept')
   }
   return warnings
 }
@@ -202,7 +282,10 @@ export class ProfileOperations {
     if (this.busy) return emptyPlan(this.options.profile.runtime.profileName, request.action, 'another-operation-is-running')
     const capabilities = await this.options.profile.capabilities()
     if (!capabilities.profileWritable) return emptyPlan(this.options.profile.runtime.profileName, request.action, 'profile-not-writable')
-    if (!capabilities.dshAvailable) return emptyPlan(this.options.profile.runtime.profileName, request.action, 'dsh-command-unavailable')
+    if (request.action !== 'pause' && request.action !== 'resume') {
+      if (!capabilities.dshAvailable) return emptyPlan(this.options.profile.runtime.profileName, request.action, 'dsh-command-unavailable')
+      if (!capabilities.pnpmAvailable) return emptyPlan(this.options.profile.runtime.profileName, request.action, 'pnpm-command-unavailable')
+    }
 
     const installed = await this.options.profile.list('zh', false)
     let packageName: string | null = request.packageName ?? null
@@ -214,12 +297,42 @@ export class ProfileOperations {
     let lifecycleScripts: readonly string[] = []
     let detail: CatalogPluginDetail | null = null
 
+    if (request.action === 'pause' || request.action === 'resume') {
+      if (packageName === null || !validPackageName(packageName)) return emptyPlan(this.options.profile.runtime.profileName, request.action, 'package-name-invalid')
+      const row = installed.find(item => item.packageName === packageName)
+      if (row === undefined) return emptyPlan(this.options.profile.runtime.profileName, request.action, 'package-not-installed', packageName)
+      if (!row.directDependency || row.system) return emptyPlan(this.options.profile.runtime.profileName, request.action, 'system-package-protected', packageName)
+      if (row.state === 'pending-removal' || row.state === 'pending-install' || row.state === 'pending-update') {
+        return emptyPlan(this.options.profile.runtime.profileName, request.action, 'restart-required-before-next-change', packageName)
+      }
+      if (packageName === 'dsh-plugin-console' && request.action === 'pause') {
+        return emptyPlan(this.options.profile.runtime.profileName, request.action, 'self-pause-protected', packageName)
+      }
+      if (!row.bundle || row.runtimeEntries.length === 0) {
+        return emptyPlan(this.options.profile.runtime.profileName, request.action, 'plugin-entry-unavailable', packageName)
+      }
+      const paused = row.state === 'paused' || row.state === 'partially-paused'
+      if (request.action === 'pause' && paused) return emptyPlan(this.options.profile.runtime.profileName, request.action, 'already-paused', packageName)
+      if (request.action === 'resume' && !paused) return emptyPlan(this.options.profile.runtime.profileName, request.action, 'already-active', packageName)
+      return this.storePlan({
+        action: request.action,
+        catalogId: row.catalogId,
+        packageName,
+        currentVersion: row.version,
+        targetVersion: row.version,
+        sourceSpec: null,
+        artifactIntegrity: null,
+        lifecycleScripts,
+        warnings: warningList({ warnings: [] }, request.action),
+      })
+    }
+
     if (request.action === 'remove') {
       if (packageName === null || !validPackageName(packageName)) return emptyPlan(this.options.profile.runtime.profileName, request.action, 'package-name-invalid')
       const row = installed.find(item => item.packageName === packageName)
       if (row === undefined) return emptyPlan(this.options.profile.runtime.profileName, request.action, 'package-not-installed', packageName)
-      if (!row.directDependency) return emptyPlan(this.options.profile.runtime.profileName, request.action, 'system-package-protected', packageName)
-      if (row.state === 'pending-removal' || row.state === 'pending-install' || row.state === 'pending-update') {
+      if (!row.directDependency || row.system) return emptyPlan(this.options.profile.runtime.profileName, request.action, 'system-package-protected', packageName)
+      if (row.state === 'pending-removal' || row.state === 'pending-update') {
         return emptyPlan(this.options.profile.runtime.profileName, request.action, 'restart-required-before-next-change', packageName)
       }
       currentVersion = row.version
@@ -375,6 +488,7 @@ export class ProfileOperations {
         backupFile(join(this.options.profile.runtime.dir, 'package.json')),
         backupFile(join(this.options.profile.runtime.dir, 'pnpm-lock.yaml')),
         backupFile(join(this.options.profile.runtime.dir, 'pnpm-workspace.yaml')),
+        backupFile(profilePatchPath(this.options.profile.runtime)),
       ])
     } catch (error) {
       return snapshotResult(this.options.profile, plan.action, 'backup-failed', plan.packageName, false, 'not-needed', errorMessage(error))
@@ -383,10 +497,18 @@ export class ProfileOperations {
   }
 
   private async planStillTargetsCurrentState(plan: OperationPlan & { readonly status: 'ready' }): Promise<boolean> {
+    if (plan.action === 'pause' || plan.action === 'resume') {
+      const rows = await this.options.profile.list('zh', false)
+      const row = rows.find(item => item.packageName === plan.packageName)
+      if (row === undefined || !row.directDependency || row.system || row.version !== plan.currentVersion) return false
+      if (row.runtimeEntries.length === 0) return false
+      const paused = row.state === 'paused' || row.state === 'partially-paused'
+      return plan.action === 'pause' ? !paused : paused
+    }
     if (plan.action === 'remove') {
       const rows = await this.options.profile.list('zh', false)
       const row = rows.find(item => item.packageName === plan.packageName)
-      return row !== undefined && row.directDependency && row.version === plan.currentVersion
+      return row !== undefined && row.directDependency && !row.system && row.version === plan.currentVersion
     }
     if (plan.catalogId !== null) {
       const detail = await this.options.catalog.detail(plan.catalogId, 'en', true)
@@ -403,6 +525,31 @@ export class ProfileOperations {
   }
 
   private async runPlan(plan: OperationPlan & { readonly status: 'ready' }, backups: readonly FileBackup[]): Promise<OperationResult> {
+    if (plan.action === 'pause' || plan.action === 'resume') {
+      const paused = plan.action === 'pause'
+      let targets: readonly PluginActivationTarget[]
+      try {
+        targets = await this.options.profile.setPluginPaused(plan.packageName as string, paused)
+      } catch (error) {
+        const rollback = await this.rollbackActivation(backups)
+        return snapshotResult(this.options.profile, plan.action, 'activation-change-failed', plan.packageName, false, rollback, errorMessage(error))
+      }
+      const composition = await this.runCommand(
+        ['--profile', this.options.profile.runtime.profileName, '--dump-config'],
+        this.options.profile.runtime.dir,
+        this.timeoutMs,
+      )
+      if (composition.unavailable || composition.timedOut || composition.code !== 0) {
+        const rollback = await this.rollbackActivation(backups)
+        return snapshotResult(this.options.profile, plan.action, 'composition-validation-failed', plan.packageName, false, rollback, composition.output)
+      }
+      if (composition.stdoutTruncated || !activationDumpMatches(composition.stdout ?? composition.output, targets, paused)) {
+        const rollback = await this.rollbackActivation(backups)
+        return snapshotResult(this.options.profile, plan.action, 'activation-validation-failed', plan.packageName, false, rollback, null)
+      }
+      return snapshotResult(this.options.profile, plan.action, 'succeeded', plan.packageName, true, 'not-needed', null)
+    }
+
     const args = plan.action === 'remove'
       ? ['plugin', '--profile', this.options.profile.runtime.profileName, 'remove', plan.packageName as string]
       : [
@@ -466,9 +613,22 @@ export class ProfileOperations {
     return snapshotResult(this.options.profile, plan.action, 'succeeded', plan.packageName, true, 'not-needed', result.output)
   }
 
-  private async rollback(backups: readonly FileBackup[]): Promise<OperationResult['rollback']> {
+  private async rollbackActivation(backups: readonly FileBackup[]): Promise<OperationResult['rollback']> {
+    const restored = await this.rollback(backups, false)
+    if (restored === 'failed') return 'failed'
+    const validation = await this.runCommand(
+      ['--profile', this.options.profile.runtime.profileName, '--dump-config'],
+      this.options.profile.runtime.dir,
+      this.timeoutMs,
+    )
+    return validation.code === 0 && !validation.unavailable && !validation.timedOut ? 'succeeded' : 'failed'
+  }
+
+  private async rollback(backups: readonly FileBackup[], repairPackages = true): Promise<OperationResult['rollback']> {
     try {
+      if (!(await backupFilesChanged(backups))) return 'not-needed'
       await restoreFiles(backups)
+      if (!repairPackages) return 'succeeded'
       await rm(join(this.options.profile.runtime.dir, 'node_modules'), { recursive: true, force: true })
       const hasLockfile = backups.some(file => file.path.endsWith('pnpm-lock.yaml') && file.content !== null)
       const installArgs = ['plugin', '--profile', this.options.profile.runtime.profileName, 'install']

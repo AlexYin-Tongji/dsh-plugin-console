@@ -4,17 +4,18 @@
 [![npm](https://img.shields.io/npm/v/dsh-plugin-console.svg)](https://www.npmjs.com/package/dsh-plugin-console)
 [![license](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-`dsh-plugin-console` 是一个可安装到 DeepSeek Harness Web profile 的插件管理器：它把社区目录、当前 profile 的包清单和 Loader 运行态放在一个 Settings 标签页里，并通过官方 `dsh plugin` 命令完成安装、更新和删除。
+`dsh-plugin-console` 是一个可安装到 DeepSeek Harness Web profile 的插件管理器：它把社区目录、当前 profile 的包清单和 Loader 运行态放在 Settings 的一级“插件管理”页面里，并通过官方 `dsh plugin` 命令完成安装、更新和删除。
 
 ## 已实现
 
 - **插件商店**：默认同步 [awesome-dsh-plugin](https://awesome-dsh-plugin.com/plugins.json)，支持搜索、分类、分页和本地 last-known-good 缓存。
 - **安装前验证**：npm 包检查合法 SemVer、repository、HTTPS tarball、SHA-512 integrity、`dsh.bundle.patch` 和生命周期脚本；GitHub 包固定到 40 位 commit，并确认 `package.json` 与声明的 patch 文件存在。
 - **已安装清单**：读取当前 profile 的 direct dependencies、bundle 顺序、解析后的 package manifest、Loader entry/Fiber phase 和 Web client 能力。
-- **使用说明**：优先读取已安装包内的 `README.zh.md` / `README.md`，使用 DSH 原生 `MarkdownText` 展示；raw HTML、相对链接和危险协议由宿主 renderer 禁用。
+- **使用说明**：读取 Markdown、MDX、RST、TXT 和无扩展名 README；Markdown 使用 README 专用的 GFM + 安全 HTML renderer，支持常见段落、链接、徽章和相对图片，所有文档都可切换到保留原文的源码视图。
 - **快捷更新**：社区目录中的包按已验证 artifact 更新；目录外 npm 包只有在同名、同 repository、合法升级版本和 integrity 都成立时才可更新，并在确认页单独警告。
 - **快捷删除**：只允许删除 direct dependency，系统 bundle 受保护；删除包不会擅自删除包创建的数据。
-- **变更确认**：所有写操作先生成 5 分钟有效的 plan；执行前重新校验 profile 指纹、当前包状态和 artifact integrity，同一时间只允许一个变更。失败时恢复元数据、清理 profile `node_modules`，再按恢复后的 lockfile 做 frozen reinstall。
+- **暂停使用**：保留已安装依赖，通过 profile 的结构化 Loader patch 持久化 `disabled` 状态；可随时恢复，管理器自身不会允许自暂停。
+- **变更确认**：所有写操作先生成 5 分钟有效的 plan；执行前重新校验 profile 指纹、当前包状态和 artifact integrity，同一时间只允许一个变更。元数据实际变化后才清理 profile `node_modules` 并按恢复后的 lockfile 做 frozen reinstall，供应链策略在命令开始前拒绝时不会破坏现有依赖。
 - **重启提示**：变更由 pnpm/profile manifest 持久化，当前 Loader 不会被伪装成已更新，页面会明确显示重启后生效。
 
 ## 安装
@@ -65,13 +66,13 @@ bundle 默认配置位于 `cordis.patch.yml`。可在 profile 的 `cordis.patch.
 DSH 插件是 Host 进程中的受信任代码，不是隔离的浏览器扩展。这个管理器遵循以下边界：
 
 1. 社区 feed 只用于发现，不执行 feed 中的 `install` 字符串。
-2. 浏览器 API 只有 typed `install`、`update`、`remove`，没有任意 pnpm argv 或 shell 接口。
+2. 浏览器 API 只有 typed `install`、`update`、`remove`、`pause`、`resume`，没有任意 pnpm argv 或 shell 接口。
 3. 子进程使用参数数组和 `shell: false` 调用 `dsh plugin`。
 4. 安装、更新固定传 `--ignore-scripts`；需要构建脚本的包不会被静默放行。
 5. GitHub 来源必须固定到 commit；npm 来源使用精确版本，并在安装后核对 lockfile integrity。
 6. pnpm 成功后还会运行 `dsh --profile <name> --dump-config`；版本、bundle、integrity 或 composition 任一不匹配都视为失败并进入恢复。
 7. API 仅接受同源 POST；变更请求还必须来自 loopback。profile 路径从 Loader `baseUrl` 推导并限制在 `$DSH_HOME/profiles` 下。
-8. README 使用 DSH 自带的不可信 Markdown renderer；不会在 client bundle 中引入 Node builtin 或另一套 Markdown runtime。
+8. README 使用独立的不可信内容 renderer；raw HTML 只允许安全标签和协议，事件属性、脚本、iframe、危险 URL 会被清理，非 Markdown 和源码模式只展示纯文本。
 9. 删除只改变 package-manager/profile 状态，不清理未知的插件数据目录。
 
 “已验证”只表示 manifest 和 artifact 结构符合 DSH 安装约定，不表示作者或代码经过安全背书。

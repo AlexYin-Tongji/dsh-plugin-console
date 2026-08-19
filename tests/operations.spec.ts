@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
@@ -12,8 +12,9 @@ function profileStub(dir = '/tmp/test-profile'): any {
     get isBusy() { return busy },
     setBusy(value: boolean) { busy = value },
     fingerprint: () => 'stable',
-    capabilities: async () => ({ profileName: 'test', profileWritable: true, dshAvailable: true, busy, message: null }),
+    capabilities: async () => ({ profileName: 'test', profileWritable: true, dshAvailable: true, pnpmAvailable: true, busy, message: null }),
     list: async () => [],
+    setPluginPaused: async (packageName: string) => [{ id: 'demo', name: packageName }],
   }
 }
 
@@ -65,6 +66,29 @@ describe('profile operations', () => {
     ])
     expect(calls[1]).toEqual(['--profile', 'test', '--dump-config'])
     expect(result.capabilities.busy).toBe(false)
+  })
+
+  it('does not erase node_modules when pnpm rejects before metadata changes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-plugin-console-policy-failure-'))
+    try {
+      await writeFile(join(root, 'package.json'), '{"dependencies":{}}\n')
+      await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - .\n')
+      await mkdir(join(root, 'node_modules'), { recursive: true })
+      await writeFile(join(root, 'node_modules', 'keep.txt'), 'keep\n')
+      const profile = profileStub(root)
+      const manager = new ProfileOperations({
+        profile,
+        catalog: catalogStub(),
+        dshBin: 'dsh',
+        runCommand: async () => ({ code: 1, unavailable: false, timedOut: false, output: 'minimum release age policy' }),
+      })
+      const plan = await manager.plan({ action: 'install', catalogId: 'acme/demo-plugin' })
+      const result = await manager.execute(plan.planId as string)
+      expect(result).toMatchObject({ status: 'failed', code: 'dsh-command-failed', rollback: 'not-needed' })
+      expect(await readFile(join(root, 'node_modules', 'keep.txt'), 'utf8')).toBe('keep\n')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 
   it('admits only one concurrent execution before the first await', async () => {
@@ -141,7 +165,7 @@ describe('profile operations', () => {
     expect(plan.sourceSpec).toBe(`github:acme/demo-plugin#${'b'.repeat(40)}`)
   })
 
-  it('rejects a lockfile integrity mismatch and performs frozen clean repair', async () => {
+  it('rejects a stale lockfile snapshot not selected by the root importer', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-plugin-console-operation-'))
     try {
       await writeFile(join(root, 'package.json'), '{"dependencies":{}}\n')
@@ -158,9 +182,15 @@ describe('profile operations', () => {
           if (args[3] === 'add') {
             await writeFile(join(root, 'pnpm-lock.yaml'), [
               "lockfileVersion: '9.0'",
+              'importers:',
+              '  .:',
+              '    dependencies:',
+              '      demo-plugin:',
+              '        specifier: 9.9.9',
+              '        version: 9.9.9',
               'packages:',
               '  demo-plugin@1.2.0:',
-              '    resolution: {integrity: sha512-different}',
+              '    resolution: {integrity: sha512-expected}',
               '',
             ].join('\n'))
             profile.list = async () => [{
@@ -186,6 +216,104 @@ describe('profile operations', () => {
     }
   })
 
+  it('validates integrity through the root importer with a peer-suffixed resolution', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-plugin-console-integrity-success-'))
+    try {
+      await writeFile(join(root, 'package.json'), '{"dependencies":{}}\n')
+      await writeFile(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - .\n')
+      const profile = profileStub(root)
+      const manager = new ProfileOperations({
+        profile,
+        catalog: catalogStub('sha512-expected'),
+        dshBin: 'dsh',
+        runCommand: async args => {
+          if (args[3] === 'add') {
+            await writeFile(join(root, 'pnpm-lock.yaml'), [
+              "lockfileVersion: '9.0'",
+              'importers:',
+              '  .:',
+              '    dependencies:',
+              '      demo-plugin:',
+              '        specifier: 1.2.0',
+              '        version: 1.2.0(react@18.3.1)',
+              'packages:',
+              '  demo-plugin@1.2.0:',
+              '    resolution: {integrity: sha512-expected}',
+              '',
+            ].join('\n'))
+            profile.list = async () => [{
+              packageName: 'demo-plugin', requestedSpec: '1.2.0', version: '1.2.0', description: 'Demo',
+              author: null, license: 'MIT', homepage: null, repositoryUrl: 'https://github.com/acme/demo-plugin',
+              system: false, directDependency: true, bundle: true, client: false,
+              activeAtLaunch: false, activeAfterRestart: true, state: 'pending-install', runtimeEntries: [],
+              latestVersion: null, updateAvailable: false, updateCheckError: null, catalogId: 'acme/demo-plugin',
+            }]
+          }
+          return { code: 0, unavailable: false, timedOut: false, output: null }
+        },
+      })
+      const plan = await manager.plan({ action: 'install', catalogId: 'acme/demo-plugin' })
+      expect((await manager.execute(plan.planId as string)).status).toBe('succeeded')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('accepts a successful removal that remains visible until restart', async () => {
+    const profile = profileStub()
+    const calls: string[][] = []
+    let removed = false
+    const active = {
+      packageName: 'demo-plugin', requestedSpec: '1.0.0', version: '1.0.0', description: 'Demo',
+      author: null, license: 'MIT', homepage: null, repositoryUrl: 'https://github.com/acme/demo-plugin',
+      system: false, directDependency: true, bundle: true, client: false,
+      activeAtLaunch: true, activeAfterRestart: true, state: 'active', runtimeEntries: [],
+      latestVersion: null, updateAvailable: false, updateCheckError: null, catalogId: 'acme/demo-plugin',
+    } as const
+    profile.list = async () => removed
+      ? [{ ...active, requestedSpec: null, directDependency: false, system: true, activeAfterRestart: false, state: 'pending-removal' }]
+      : [active]
+    const manager = new ProfileOperations({
+      profile,
+      catalog: catalogStub(),
+      dshBin: 'dsh',
+      runCommand: async args => {
+        calls.push([...args])
+        if (args[3] === 'remove') removed = true
+        return { code: 0, unavailable: false, timedOut: false, output: null }
+      },
+    })
+    const plan = await manager.plan({ action: 'remove', packageName: 'demo-plugin' })
+    const result = await manager.execute(plan.planId as string)
+    expect(result.status).toBe('succeeded')
+    expect(calls[0]).toEqual(['plugin', '--profile', 'test', 'remove', 'demo-plugin'])
+    expect(calls[1]).toEqual(['--profile', 'test', '--dump-config'])
+  })
+
+  it('allows removing a pending install before restart', async () => {
+    const profile = profileStub()
+    let removed = false
+    profile.list = async () => removed ? [] : [{
+      packageName: 'demo-plugin', requestedSpec: '1.0.0', version: '1.0.0', description: 'Demo',
+      author: null, license: 'MIT', homepage: null, repositoryUrl: 'https://github.com/acme/demo-plugin',
+      system: false, directDependency: true, bundle: true, client: false,
+      activeAtLaunch: false, activeAfterRestart: true, state: 'pending-install', runtimeEntries: [],
+      latestVersion: null, updateAvailable: false, updateCheckError: null, catalogId: 'acme/demo-plugin',
+    }]
+    const manager = new ProfileOperations({
+      profile,
+      catalog: catalogStub(),
+      dshBin: 'dsh',
+      runCommand: async args => {
+        if (args[3] === 'remove') removed = true
+        return { code: 0, unavailable: false, timedOut: false, output: null }
+      },
+    })
+    const plan = await manager.plan({ action: 'remove', packageName: 'demo-plugin' })
+    expect(plan.status).toBe('ready')
+    expect((await manager.execute(plan.planId as string)).status).toBe('succeeded')
+  })
+
   it('blocks removal of a non-direct system row', async () => {
     const profile = profileStub()
     profile.list = async () => [{
@@ -198,5 +326,85 @@ describe('profile operations', () => {
     const plan = await manager.plan({ action: 'remove', packageName: '@deepseek-ai/dsh-base' })
     expect(plan.status).toBe('blocked')
     expect(plan.blockReason).toBe('system-package-protected')
+  })
+
+  it('fails and rolls back when the composed pause target does not match', async () => {
+    const profile = profileStub()
+    let paused = false
+    profile.list = async () => [{
+      packageName: 'demo-plugin', requestedSpec: '1.0.0', version: '1.0.0', description: 'Demo',
+      author: null, license: 'MIT', homepage: null, repositoryUrl: 'https://github.com/acme/demo-plugin',
+      system: false, directDependency: true, bundle: true, client: true,
+      activeAtLaunch: true, activeAfterRestart: true, state: paused ? 'paused' : 'active',
+      runtimeEntries: [{ entryId: 'demo', enabled: !paused, phase: paused ? null : 'active' }],
+      latestVersion: null, updateAvailable: false, updateCheckError: null, catalogId: 'acme/demo-plugin',
+    }]
+    profile.setPluginPaused = async (packageName: string, value: boolean) => {
+      paused = value
+      return [{ id: 'demo', name: packageName }]
+    }
+    const manager = new ProfileOperations({
+      profile,
+      catalog: catalogStub(),
+      dshBin: 'dsh',
+      runCommand: async () => ({
+        code: 0,
+        unavailable: false,
+        timedOut: false,
+        output: '- id: other\n  name: demo-plugin\n  disabled: true\n',
+      }),
+    })
+    const plan = await manager.plan({ action: 'pause', packageName: 'demo-plugin' })
+    expect(await manager.execute(plan.planId as string)).toMatchObject({
+      status: 'failed',
+      code: 'activation-validation-failed',
+      rollback: 'succeeded',
+    })
+  })
+
+  it('pauses and resumes Loader entries without invoking the package manager', async () => {
+    const profile = profileStub()
+    let paused = false
+    const calls: string[][] = []
+    profile.list = async () => [{
+      packageName: 'demo-plugin', requestedSpec: '1.0.0', version: '1.0.0', description: 'Demo',
+      author: null, license: 'MIT', homepage: null, repositoryUrl: 'https://github.com/acme/demo-plugin',
+      system: false, directDependency: true, bundle: true, client: true,
+      activeAtLaunch: true, activeAfterRestart: true, state: paused ? 'paused' : 'active',
+      runtimeEntries: [{ entryId: 'demo', enabled: !paused, phase: paused ? null : 'active' }],
+      latestVersion: null, updateAvailable: false, updateCheckError: null, catalogId: 'acme/demo-plugin',
+    }]
+    profile.setPluginPaused = async (packageName: string, value: boolean) => {
+      paused = value
+      return [{ id: 'demo', name: packageName }]
+    }
+    const manager = new ProfileOperations({
+      profile,
+      catalog: catalogStub(),
+      dshBin: 'dsh',
+      runCommand: async args => {
+        calls.push([...args])
+        return {
+          code: 0,
+          unavailable: false,
+          timedOut: false,
+          output: `- id: demo\n  name: demo-plugin\n  disabled: ${String(paused)}\n`,
+        }
+      },
+    })
+
+    const pausePlan = await manager.plan({ action: 'pause', packageName: 'demo-plugin' })
+    expect(pausePlan).toMatchObject({ status: 'ready', action: 'pause', warnings: ['restart-required'] })
+    expect((await manager.execute(pausePlan.planId as string))).toMatchObject({ status: 'succeeded', action: 'pause' })
+    expect(paused).toBe(true)
+
+    const resumePlan = await manager.plan({ action: 'resume', packageName: 'demo-plugin' })
+    expect(resumePlan).toMatchObject({ status: 'ready', action: 'resume' })
+    expect((await manager.execute(resumePlan.planId as string))).toMatchObject({ status: 'succeeded', action: 'resume' })
+    expect(paused).toBe(false)
+    expect(calls).toEqual([
+      ['--profile', 'test', '--dump-config'],
+      ['--profile', 'test', '--dump-config'],
+    ])
   })
 })

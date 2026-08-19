@@ -2,6 +2,35 @@
 
 All notable changes to DSH Plugin Console are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-08-19
+
+### Added
+
+- First-level Settings → Plugin Manager page with catalog and installed-package views.
+- Persisted pause and resume operations that cover every Loader entry contributed by an installed bundle, including aggregate bundles.
+- README-specific GFM renderer with sanitized common HTML, GitHub-relative links and images, and a source view.
+- Explicit `dsh` and `pnpm` capability reporting, localized pause/resume states, and focused operation diagnostics.
+
+### Changed
+
+- Release publishing is idempotent when an npm version already exists and requires the repository `npm` environment to provide `NPM_TOKEN` for new versions.
+- Profile capability checks accept optional workspace and lock files, while integrity validation follows the root pnpm importer and peer-suffixed resolutions.
+- Pending installations can be removed before restart, allowing an installation to be cancelled cleanly.
+
+### Fixed
+
+- Install and remove operations no longer fail merely because optional profile files are absent.
+- A package-manager policy failure before metadata changes no longer deletes `node_modules` during rollback.
+- Pause/resume now validates the composed profile and restores the previous patch when the target entries do not match.
+- README raw HTML is rendered as safe elements instead of appearing as literal source text.
+
+### Compatibility
+
+- DeepSeek Harness `0.1.0-rc.6`
+- Cordis `4.0.1`
+- Node.js `22.19+` or `24+`
+- pnpm `10+`
+
 ## [0.1.0] - 2026-08-17
 
 ### Added

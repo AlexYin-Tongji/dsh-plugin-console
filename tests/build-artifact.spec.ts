@@ -20,7 +20,7 @@ describe('built client artifact', () => {
     ])
   })
 
-  it('evaluates against the rc.6 module-map contract and registers the Manage slot', async () => {
+  it('evaluates against the rc.6 module-map contract and registers a first-level settings section', async () => {
     const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8')
     let registration: { factory: (require: (id: string) => unknown) => any } | null = null
     const window = { __ModuleLoader__: { load(value: typeof registration) { registration = value } } }
@@ -37,7 +37,9 @@ describe('built client artifact', () => {
       if (id === '@deepseek-ai/dsh-client-ui-primitives') return {}
       throw new Error(`unexpected client module ${id}`)
     })
+    let injectedName: string | null = null
     let registeredId: string | null = null
+    let registeredName: string | null = null
     exports.apply({
       effect: (factory: () => unknown) => factory(),
       locale: {
@@ -46,10 +48,16 @@ describe('built client artifact', () => {
         getLocale: () => ({ active: 'en' }),
       },
       slots: {
-        inject: (_name: string, factory: () => unknown) => factory(),
-        register: (options: { id?: string }) => { registeredId = options.id ?? null; return () => undefined },
+        inject: (name: string, factory: () => unknown) => { injectedName = name; return factory() },
+        register: (options: { id?: string; name?: string }) => {
+          registeredId = options.id ?? null
+          registeredName = options.name ?? null
+          return () => undefined
+        },
       },
     })
-    expect(registeredId).toBe('manage')
+    expect(injectedName).toBe('settings.section')
+    expect(registeredName).toBe('settings.section')
+    expect(registeredId).toBe('plugin-manager')
   })
 })

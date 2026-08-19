@@ -1,4 +1,4 @@
-import { C as VerificationState, S as UiLocale, _ as OperationPlanRequest, a as BootstrapResponse, b as RuntimeEntrySummary, c as CatalogPluginDetail, d as InstalledPluginDetail, f as InstalledPluginSummary, g as OperationPlan, h as OperationAction, i as ArtifactManifestSummary, l as CatalogPluginSummary, m as ManagerCapabilities, n as ApiSuccess, o as CatalogListRequest, p as InstalledState, r as ArtifactKind, s as CatalogListResponse, t as ApiFailure, u as CatalogStatus, v as OperationResult, x as RuntimePhase, y as OperationWarning } from "./types-C9apLrl4.js";
+import { C as VerificationState, S as UiLocale, _ as OperationPlanRequest, a as BootstrapResponse, b as RuntimeEntrySummary, c as CatalogPluginDetail, d as InstalledPluginDetail, f as InstalledPluginSummary, g as OperationPlan, h as OperationAction, i as ArtifactManifestSummary, l as CatalogPluginSummary, m as ManagerCapabilities, n as ApiSuccess, o as CatalogListRequest, p as InstalledState, r as ArtifactKind, s as CatalogListResponse, t as ApiFailure, u as CatalogStatus, v as OperationResult, x as RuntimePhase, y as OperationWarning } from "./types-CEotyhPd.js";
 import z from "@deepseek-ai/schemastery";
 import { ProfileManifest } from "@deepseek-ai/dsh-app-boot";
 import { Context } from "@deepseek-ai/cordis";
@@ -64,6 +64,10 @@ interface ProfileRuntime {
   readonly launchDependencies: Readonly<Record<string, string>>;
   readonly launchBundles: readonly string[];
 }
+interface PluginActivationTarget {
+  readonly id: string;
+  readonly name: string;
+}
 interface ProfileManagerOptions {
   readonly ctx: Context;
   readonly profileDir?: string;
@@ -89,6 +93,7 @@ declare class ProfileManager {
   fingerprint(): string;
   list(locale?: UiLocale, checkUpdates?: boolean): Promise<readonly InstalledPluginSummary[]>;
   detail(packageName: string, locale?: UiLocale): Promise<InstalledPluginDetail | null>;
+  setPluginPaused(packageName: string, paused: boolean): Promise<readonly PluginActivationTarget[]>;
   currentManifest(): Promise<ProfileManifest>;
   close(): Promise<void>;
 }
@@ -99,6 +104,8 @@ interface CommandResult {
   readonly unavailable: boolean;
   readonly timedOut: boolean;
   readonly output: string | null;
+  readonly stdout?: string | null;
+  readonly stdoutTruncated?: boolean;
 }
 interface OperationOptions {
   readonly profile: ProfileManager;
@@ -125,6 +132,7 @@ declare class ProfileOperations {
   private prepareAndRun;
   private planStillTargetsCurrentState;
   private runPlan;
+  private rollbackActivation;
   private rollback;
   private prunePlans;
   close(): Promise<void>;

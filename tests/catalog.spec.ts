@@ -93,8 +93,8 @@ describe('plugin catalog', () => {
           scripts: { build: 'tsdown' },
         }), { status: 200 })
       }
-      if (url === 'https://raw.githubusercontent.com/Acme/demo-plugin/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/README.md') {
-        return new Response('# Demo\n\nUsage', { status: 200 })
+      if (url === 'https://raw.githubusercontent.com/Acme/demo-plugin/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/README.txt') {
+        return new Response('Demo usage\n==========\nrun demo', { status: 200 })
       }
       return new Response('not found', { status: 404 })
     }
@@ -117,7 +117,8 @@ describe('plugin catalog', () => {
         commitSha: 'a'.repeat(40),
         integrity: npmIntegrity,
         manifest: { bundle: true, client: true },
-        readme: '# Demo\n\nUsage',
+        readme: 'Demo usage\n==========\nrun demo',
+        readmeSource: `Acme/demo-plugin@${'a'.repeat(40)}/README.txt`,
       })
       expect(calls).toContain('https://catalog.test/plugins.json')
       expect(calls).toContain('https://registry.npmjs.org/acme-demo-plugin/latest')

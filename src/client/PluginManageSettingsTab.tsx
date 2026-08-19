@@ -4,11 +4,12 @@ import {
   IconChevronRightOutline14,
   IconCloseOutline16,
   IconDownloadOutline16,
+  IconPauseOutline16,
+  IconPlayOutline16,
   IconRefreshOutline16,
   IconRightUpOutline14,
   IconSearchOutline16,
   IconTrashOutline16,
-  MarkdownText,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
@@ -27,6 +28,7 @@ import type {
 } from '../types.ts'
 import type { PluginManageLocaleKey } from './locales.ts'
 import type { PluginManageApi } from './api.ts'
+import { RichReadme } from './ReadmeRenderer.tsx'
 import css from './PluginManageSettingsTab.module.css'
 
 export interface PluginManageSettingsTabInjected {
@@ -35,7 +37,7 @@ export interface PluginManageSettingsTabInjected {
 }
 
 export type PluginManageSettingsTabProps =
-  PropsRuntime<'settings.plugins.tab'>
+  PropsRuntime<'settings.section'>
   & PropsLocale<'settings.pluginConsole'>
   & InjectFace<PluginManageSettingsTabInjected>
 
@@ -91,6 +93,8 @@ function localizedDescription(description: { readonly zh: string; readonly en: s
 function statusLabel(state: InstalledPluginSummary['state'], t: Translate): string {
   switch (state) {
     case 'active': return t('active')
+    case 'paused': return t('paused')
+    case 'partially-paused': return t('partiallyPaused')
     case 'installed-inactive': return t('inactive')
     case 'pending-install': return t('pendingInstall')
     case 'pending-update': return t('pendingUpdate')
@@ -106,14 +110,20 @@ function reasonLabel(reason: string | null, t: Translate): string {
     case 'profile-not-writable': return t('reasonProfile')
     case 'another-operation-is-running': return t('reasonBusy')
     case 'dsh-command-unavailable': return t('reasonUnavailable')
+    case 'pnpm-command-unavailable': return t('reasonPnpmUnavailable')
     case 'system-package-protected': return t('reasonProtected')
     case 'package-not-installed': return t('reasonMissing')
+    case 'already-paused': return t('reasonAlreadyPaused')
+    case 'already-active': return t('reasonAlreadyActive')
+    case 'plugin-entry-unavailable': return t('reasonEntryUnavailable')
+    case 'self-pause-protected': return t('reasonSelfPause')
     case 'restart-required-before-next-change': return t('reasonRestart')
     case 'profile-changed': return t('reasonChanged')
     case 'artifact-repository-mismatch': return t('reasonRepository')
     case 'installed-version-invalid': return t('reasonVersion')
     case 'plan-state-changed': return t('reasonState')
     case 'composition-validation-failed': return t('reasonState')
+    case 'activation-validation-failed': return t('reasonState')
     default: return reason ?? t('reasonGeneric')
   }
 }
@@ -216,6 +226,8 @@ function InstalledRow({
   onOpen,
   onUpdate,
   onRemove,
+  onPause,
+  onResume,
   working,
 }: {
   readonly item: InstalledPluginSummary
@@ -223,11 +235,17 @@ function InstalledRow({
   readonly onOpen: () => void
   readonly onUpdate: () => void
   readonly onRemove: () => void
+  readonly onPause: () => void
+  readonly onResume: () => void
   readonly working: boolean
 }): ReactNode {
   const pending = item.state.startsWith('pending-')
+  const paused = item.state === 'paused' || item.state === 'partially-paused'
   const canUpdate = item.updateAvailable && !working && !pending && !item.system
-  const canRemove = item.directDependency && !item.system && !working && !pending
+  const canRemove = item.directDependency && !item.system && !working
+    && item.state !== 'pending-removal' && item.state !== 'pending-update'
+  const canToggle = item.packageName !== 'dsh-plugin-console'
+    && item.directDependency && !item.system && !working && !pending && item.runtimeEntries.length > 0
   return <li className={css.row}>
     <button className={css.rowOpen} type="button" onClick={onOpen}>
       <OwnerAvatar owner={item.repositoryUrl?.split('/')[3] ?? ''} name={item.packageName} />
@@ -247,6 +265,8 @@ function InstalledRow({
       </span>
     </button>
     <span className={css.iconActions}>
+      {canToggle && !paused ? <button className={css.iconButton} type="button" title={t('ariaPause')} aria-label={t('ariaPause')} onClick={onPause}><IconPauseOutline16 aria-hidden="true" /></button> : null}
+      {canToggle && paused ? <button className={css.iconButton} type="button" title={t('ariaResume')} aria-label={t('ariaResume')} onClick={onResume}><IconPlayOutline16 aria-hidden="true" /></button> : null}
       {canUpdate ? <button className={css.iconButton} type="button" title={t('ariaUpdate')} aria-label={t('ariaUpdate')} onClick={onUpdate}><IconRefreshOutline16 aria-hidden="true" /></button> : null}
       {canRemove ? <button className={css.iconButtonDanger} type="button" title={t('ariaRemove')} aria-label={t('ariaRemove')} onClick={onRemove}><IconTrashOutline16 aria-hidden="true" /></button> : null}
       <button className={css.ghostButton} type="button" onClick={onOpen}>{t('details')}</button>
@@ -254,11 +274,37 @@ function InstalledRow({
   </li>
 }
 
-function Markdown({ value }: { readonly value: string | null }): ReactNode {
+function isMarkdownSource(source: string | null): boolean {
+  if (source === null) return true
+  const file = source.split('/').at(-1)?.toLocaleLowerCase() ?? ''
+  return /\.(?:md|markdown|mdx)$/.test(file)
+}
+
+function Readme({
+  value,
+  source,
+  repositoryUrl,
+  gitRef,
+  t,
+}: {
+  readonly value: string | null
+  readonly source: string | null
+  readonly repositoryUrl: string | null
+  readonly gitRef: string | null
+  readonly t: Translate
+}): ReactNode {
+  const markdown = isMarkdownSource(source)
+  const [mode, setMode] = useState<'rendered' | 'source'>(markdown ? 'rendered' : 'source')
   if (value === null || value.trim().length === 0) return null
-  // DSH's own MarkdownText owns the GFM parser and URL allowlist. Keeping the
-  // renderer in the host primitive also avoids shipping a second Markdown stack.
-  return <div className={css.markdown}><MarkdownText text={value} /></div>
+  return <div className={css.readmeContent}>
+    <div className={css.readmeMode} role="group" aria-label={t('usage')}>
+      {markdown ? <button className={css.readmeModeButton} type="button" data-active={mode === 'rendered' ? 'true' : undefined} onClick={() => setMode('rendered')}>{t('readmeRendered')}</button> : null}
+      <button className={css.readmeModeButton} type="button" data-active={mode === 'source' ? 'true' : undefined} onClick={() => setMode('source')}>{t('readmeSourceView')}</button>
+    </div>
+    {mode === 'rendered' && markdown
+      ? <div className={css.markdown}><RichReadme value={value} source={source} repositoryUrl={repositoryUrl} gitRef={gitRef} /></div>
+      : <pre className={css.readmeSource}>{value}</pre>}
+  </div>
 }
 
 function ReviewDialog({
@@ -278,7 +324,18 @@ function ReviewDialog({
   const closeRef = useRef<HTMLButtonElement>(null)
   const modalRef = useRef<HTMLDivElement>(null)
   const titleId = useId()
-  const requiresAck = review.plan.action !== 'remove'
+  const requiresAck = review.plan.action === 'install' || review.plan.action === 'update'
+  const workingLabel = review.plan.action === 'install'
+    ? t('installing')
+    : review.plan.action === 'update'
+      ? t('updating')
+      : review.plan.action === 'remove'
+        ? t('removing')
+        : review.plan.action === 'pause'
+          ? t('pausing')
+          : t('resuming')
+  const reviewSpec = review.plan.sourceSpec
+    ?? (review.plan.action === 'pause' || review.plan.action === 'resume' ? t('activationSpec') : t('removeSpec'))
 
   useEffect(() => {
     closeRef.current?.focus()
@@ -316,7 +373,7 @@ function ReviewDialog({
       <dl className={css.metaGrid}>
         <div><dt>{t('packageName')}</dt><dd><code>{review.plan.packageName ?? t('missingValue')}</code></dd></div>
         <div><dt>{t('reviewTarget')}</dt><dd>{review.plan.targetVersion ?? review.plan.currentVersion ?? t('missingValue')}</dd></div>
-        <div><dt>{t('reviewSpec')}</dt><dd><code className={css.breakable}>{review.plan.sourceSpec ?? t('removeSpec')}</code></dd></div>
+        <div><dt>{t('reviewSpec')}</dt><dd><code className={css.breakable}>{reviewSpec}</code></dd></div>
       </dl>
       {review.plan.warnings.length > 0 ? <div className={css.warningList}>
         <h4>{t('reviewWarnings')}</h4>
@@ -329,7 +386,7 @@ function ReviewDialog({
       <div className={css.modalActions}>
         <button className={css.ghostButton} type="button" disabled={working} onClick={onCancel}>{t('cancel')}</button>
         <button className={review.plan.action === 'remove' ? css.dangerButton : css.primaryButton} type="button" disabled={working || (requiresAck && !acknowledged)} onClick={onConfirm}>
-          {working ? t(review.plan.action === 'install' ? 'installing' : review.plan.action === 'update' ? 'updating' : 'removing') : t('confirm')}
+          {working ? workingLabel : t('confirm')}
         </button>
       </div>
     </div>
@@ -380,7 +437,7 @@ function CatalogDetailView({
     </dl> : null}
     {detail.warnings.length > 0 ? <ul className={css.inlineWarnings}>{detail.warnings.map(warning => <li key={warning}>{artifactWarningText(warning, t)}</li>)}</ul> : null}
     <div className={css.readmeHeading}><h4>{t('usage')}</h4>{detail.readmeSource ? <span>{interpolate(t('readmeSource'), { source: detail.readmeSource })}</span> : null}</div>
-    {detail.readme === null ? <p className={css.muted}>{t('noReadme')}</p> : <Markdown value={detail.readme} />}
+    {detail.readme === null ? <p className={css.muted}>{t('noReadme')}</p> : <Readme value={detail.readme} source={detail.readmeSource} repositoryUrl={detail.repositoryUrl} gitRef={detail.commitSha} t={t} />}
   </section>
 }
 
@@ -391,6 +448,8 @@ function InstalledDetailView({
   onBack,
   onUpdate,
   onRemove,
+  onPause,
+  onResume,
 }: {
   readonly detail: InstalledPluginDetail
   readonly t: Translate
@@ -398,7 +457,12 @@ function InstalledDetailView({
   readonly onBack: () => void
   readonly onUpdate: () => void
   readonly onRemove: () => void
+  readonly onPause: () => void
+  readonly onResume: () => void
 }): ReactNode {
+  const paused = detail.state === 'paused' || detail.state === 'partially-paused'
+  const canToggle = detail.packageName !== 'dsh-plugin-console'
+    && !detail.system && detail.directDependency && !detail.state.startsWith('pending-') && detail.runtimeEntries.length > 0
   return <section className={css.detail}>
     <button className={css.backButton} type="button" onClick={onBack}><IconChevronLeftOutline14 aria-hidden="true" />{t('back')}</button>
     <div className={css.detailHeader}>
@@ -414,12 +478,14 @@ function InstalledDetailView({
       <div><dt>{t('runtime')}</dt><dd>{detail.runtimeEntries.length === 0 ? t('runtimeUnknown') : detail.runtimeEntries.map(entry => interpolate(t('runtimeEntry', { id: entry.entryId, phase: entry.phase ?? t('missingValue') }), { id: entry.entryId, phase: entry.phase ?? t('missingValue') })).join(t('separator'))}</dd></div>
     </dl>
     <div className={css.detailActionRow}>
+      {canToggle && !paused ? <button className={css.ghostButton} type="button" disabled={working} onClick={onPause}><IconPauseOutline16 aria-hidden="true" />{working ? t('pausing') : t('pause')}</button> : null}
+      {canToggle && paused ? <button className={css.ghostButton} type="button" disabled={working} onClick={onResume}><IconPlayOutline16 aria-hidden="true" />{working ? t('resuming') : t('resume')}</button> : null}
       {detail.updateAvailable ? <button className={css.primaryButton} type="button" disabled={working} onClick={onUpdate}><IconRefreshOutline16 aria-hidden="true" />{working ? t('updating') : t('update')}</button> : null}
-      {!detail.system && detail.directDependency ? <button className={css.dangerButton} type="button" disabled={working} onClick={onRemove}><IconTrashOutline16 aria-hidden="true" />{working ? t('removing') : t('remove')}</button> : null}
+      {!detail.system && detail.directDependency && detail.state !== 'pending-removal' && detail.state !== 'pending-update' ? <button className={css.dangerButton} type="button" disabled={working} onClick={onRemove}><IconTrashOutline16 aria-hidden="true" />{working ? t('removing') : t('remove')}</button> : null}
       {detail.updateCheckError ? <span className={css.muted}>{t('checkFailed')}</span> : null}
     </div>
     <div className={css.readmeHeading}><h4>{t('usage')}</h4>{detail.readmeFile ? <span>{detail.readmeFile}</span> : null}</div>
-    {detail.readme === null ? <p className={css.muted}>{t('noReadme')}</p> : <Markdown value={detail.readme} />}
+    {detail.readme === null ? <p className={css.muted}>{t('noReadme')}</p> : <Readme value={detail.readme} source={detail.readmeFile} repositoryUrl={detail.repositoryUrl} gitRef={detail.requestedSpec?.match(/#([0-9a-f]{40})$/i)?.[1] ?? null} t={t} />}
   </section>
 }
 
@@ -535,7 +601,7 @@ export function PluginManageSettingsTab({ api, locale, t }: PluginManageSettings
         setBanner(t('restartBanner'))
         setSelection(null)
       } else {
-        setOperationError(interpolate(t('operationFailed', { message: '' }), { message: result.detail ?? result.code }))
+        setOperationError(interpolate(t('operationFailed', { message: '' }), { message: result.detail ?? reasonLabel(result.code, t) }))
       }
     }).catch((error: unknown) => {
       if (!alive.current || sequence !== operationSequence.current) return
@@ -563,11 +629,11 @@ export function PluginManageSettingsTab({ api, locale, t }: PluginManageSettings
   return <div className={css.section} aria-busy={load.status === 'loading' || working}>
     <header className={css.header}>
       <div>
-        <h3>{t('store')}</h3>
+        <h3>{t('nav')}</h3>
         <p>{capabilities === null ? t('loading') : interpolate(t('profile', { name: capabilities.profileName }), { name: capabilities.profileName })}</p>
       </div>
-      <span className={css.capability} data-ready={capabilities?.profileWritable && capabilities.dshAvailable ? 'true' : 'false'}>
-        {capabilities?.profileWritable && capabilities.dshAvailable ? t('dshReady') : capabilities === null ? t('loading') : t('dshMissing')}
+      <span className={css.capability} data-ready={capabilities?.profileWritable && capabilities.dshAvailable && capabilities.pnpmAvailable ? 'true' : 'false'}>
+        {capabilities?.profileWritable && capabilities.dshAvailable && capabilities.pnpmAvailable ? t('dshReady') : capabilities === null ? t('loading') : t('dshMissing')}
       </span>
     </header>
     <div className={css.viewTabs} aria-label={t('tab')}>
@@ -584,7 +650,9 @@ export function PluginManageSettingsTab({ api, locale, t }: PluginManageSettings
           : detail.status === 'ready' && storeDetail !== null ? <CatalogDetailView detail={storeDetail} language={language} t={t} working={working} onBack={closeDetail} onInstall={() => startPlan({ action: 'install', catalogId: storeDetail.id }, t('reviewInstall'))} />
             : detail.status === 'ready' && installedDetail !== null ? <InstalledDetailView detail={installedDetail} t={t} working={working} onBack={closeDetail} onUpdate={() => installedDetail.catalogId !== null
         ? startPlan({ action: 'update', catalogId: installedDetail.catalogId, packageName: installedDetail.packageName }, t('reviewUpdate'))
-        : startPlan({ action: 'update', packageName: installedDetail.packageName }, t('reviewUpdate'))} onRemove={() => startPlan({ action: 'remove', packageName: installedDetail.packageName }, t('reviewRemove'))} />
+        : startPlan({ action: 'update', packageName: installedDetail.packageName }, t('reviewUpdate'))} onRemove={() => startPlan({ action: 'remove', packageName: installedDetail.packageName }, t('reviewRemove'))}
+               onPause={() => startPlan({ action: 'pause', packageName: installedDetail.packageName }, t('reviewPause'))}
+               onResume={() => startPlan({ action: 'resume', packageName: installedDetail.packageName }, t('reviewResume'))} />
               : <p className={css.status}>{t('error')}</p>
     ) : view === 'store' ? (
       <section className={css.catalogView} aria-label={t('ariaStore')}>
@@ -611,7 +679,9 @@ export function PluginManageSettingsTab({ api, locale, t }: PluginManageSettings
         <div className={css.listHeader}><span>{interpolate(t('installedCount', { count: installed.length }), { count: installed.length })}</span><button className={css.ghostButton} type="button" disabled={working} onClick={() => setReload(value => value + 1)}>{t('refresh')}</button></div>
         {installed.length === 0 ? <p className={css.status}>{t('noPlugins')}</p> : <ul className={css.list}>{installed.map(item => <InstalledRow key={item.packageName} item={item} t={t} onOpen={() => openInstalled(item.packageName)} onUpdate={() => item.catalogId !== null
               ? startPlan({ action: 'update', catalogId: item.catalogId, packageName: item.packageName }, t('reviewUpdate'))
-              : startPlan({ action: 'update', packageName: item.packageName }, t('reviewUpdate'))} onRemove={() => startPlan({ action: 'remove', packageName: item.packageName }, t('reviewRemove'))} working={working} />)}</ul>}
+              : startPlan({ action: 'update', packageName: item.packageName }, t('reviewUpdate'))} onRemove={() => startPlan({ action: 'remove', packageName: item.packageName }, t('reviewRemove'))}
+              onPause={() => startPlan({ action: 'pause', packageName: item.packageName }, t('reviewPause'))}
+              onResume={() => startPlan({ action: 'resume', packageName: item.packageName }, t('reviewResume'))} working={working} />)}</ul>}
       </section>
     )}
     {review !== null ? <ReviewDialog review={review} t={t} working={working} onCancel={() => setReview(null)} onConfirm={confirmPlan} /> : null}

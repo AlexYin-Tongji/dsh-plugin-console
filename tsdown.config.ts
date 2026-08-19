@@ -44,6 +44,12 @@ const client: UserConfig = {
   clean: false,
   sourcemap: true,
   external: [...CLIENT_EXTERNALS],
+  noExternal: ['react-markdown', 'remark-gfm', 'rehype-raw', 'rehype-sanitize'],
+  alias: {
+    'node:process': resolve(process.cwd(), 'src/client/shims/process.ts'),
+    'node:path': resolve(process.cwd(), 'src/client/shims/path.ts'),
+    'node:url': resolve(process.cwd(), 'src/client/shims/url.ts'),
+  },
   define: {
     'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
     'import.meta.env.MODE': JSON.stringify(process.env.NODE_ENV ?? 'production'),

@@ -1,8 +1,7 @@
-/** Browser half: one Settings → Plugins → Manage tab. */
+/** Browser half: one first-level Plugin Manager settings section. */
 
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import { PluginManageSettingsTab, type PluginManageSettingsTabInjected } from './PluginManageSettingsTab.tsx'
@@ -29,11 +28,11 @@ export function apply(ctx: ClientContext): void {
     api,
     locale: () => ctx.locale.getLocale().active,
   })
-  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
-    name: 'settings.plugins.tab',
-    id: 'manage',
-    order: 30,
-    label: () => t('tab'),
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'plugin-manager',
+    order: 20,
+    label: () => t('nav'),
     locale: NS,
     inject: injected,
   }, PluginManageSettingsTab))
