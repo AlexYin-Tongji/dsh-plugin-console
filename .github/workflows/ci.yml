@@ -26,4 +26,4 @@ jobs:
       - run: dsh --version
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm run release:verify
-      - run: npm pack --dry-run
+      - run: npm pack --dry-run --ignore-scripts

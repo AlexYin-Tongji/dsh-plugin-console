@@ -14,6 +14,7 @@ All notable changes to DSH Plugin Console are documented here. The project follo
 - Preserve update discovery after an operation by refreshing the installed projection instead of replacing it with a snapshot that omits latest-version data.
 - Reject updates against pending profile changes and stale pause/remove plans whose requested source changed at the same version.
 - Bound npm registry metadata responses, clean command timeout timers, terminate timed-out capability probes, and prevent catalog refresh from racing initial bootstrap.
+- CI pack verification no longer re-runs the full test suite inside `npm pack --dry-run`, and rollback fixtures stop inheriting npm's dry-run flag when they are packed during a prepack run.
 - Localize common command, plan, catalog and recovery failure states instead of exposing internal error codes.
 
 ## [0.2.1] - 2026-08-19

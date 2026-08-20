@@ -16,7 +16,14 @@ afterEach(async () => {
 
 async function run(executable: string, args: readonly string[], cwd: string): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(executable, [...args], { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+    const env = { ...process.env }
+    // When the test suite itself runs inside `npm pack --dry-run`'s prepack
+    // script, nested `npm pack` inherits npm's dry-run flag and would not
+    // materialize the fixture tarballs. Drop the inherited flag so fixtures
+    // are always packed for real.
+    delete env.npm_config_dry_run
+    delete env.NPM_CONFIG_DRY_RUN
+    const child = spawn(executable, [...args], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
     let output = ''
     child.stdout?.on('data', chunk => { output += String(chunk) })
     child.stderr?.on('data', chunk => { output += String(chunk) })
