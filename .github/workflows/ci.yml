@@ -22,6 +22,8 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - run: npm install --global @deepseek-ai/dsh@0.1.0-rc.6
+      - run: dsh --version
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm run release:verify
       - run: npm pack --dry-run

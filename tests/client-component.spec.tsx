@@ -166,7 +166,7 @@ describe('plugin manager client', () => {
     expect(await screen.findByText(/stop and restart DSH, then refresh the page/)).toBeTruthy()
   })
 
-  it('never applies an available update until the user reviews, acknowledges, and confirms it', async () => {
+  it('applies an available update with one click after planning', async () => {
     const installed = [{
       packageName: 'demo-plugin', requestedSpec: '1.0.0', version: '1.0.0', description: 'Demo',
       author: null, license: 'MIT', homepage: null, repositoryUrl: 'https://github.com/acme/demo',
@@ -200,12 +200,44 @@ describe('plugin manager client', () => {
     render(<PluginManageSettingsTab {...({ api, locale: () => 'en', t } as any)} />)
     fireEvent.click(await screen.findByRole('button', { name: /Installed/ }))
     fireEvent.click(await screen.findByRole('button', { name: 'Update plugin' }))
-    const confirm = await screen.findByRole('button', { name: 'Confirm' })
-    expect((confirm as HTMLButtonElement).disabled).toBe(true)
-    expect(execute).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('checkbox'))
-    expect((confirm as HTMLButtonElement).disabled).toBe(false)
-    fireEvent.click(confirm)
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('button', { name: 'Confirm' })).toBeNull()
+  })
+
+  it('offers the manager itself as a one-click update target', async () => {
+    const installed = [{
+      packageName: 'dsh-plugin-console', requestedSpec: '0.2.1', version: '0.2.1', description: 'Plugin manager',
+      author: null, license: 'MIT', homepage: null, repositoryUrl: 'https://github.com/AlexYin-Tongji/dsh-plugin-console',
+      system: false, directDependency: true, bundle: true, client: true,
+      activeAtLaunch: true, activeAfterRestart: true, state: 'active', runtimeEntries: [],
+      latestVersion: '0.2.2', updateAvailable: true, updateCheckError: null, catalogId: 'acme/demo',
+    }] as const
+    const plan = {
+      status: 'ready', planId: 'self-update-plan-123456789', blockReason: null, action: 'update', profileName: 'web',
+      catalogId: 'acme/demo', packageName: 'dsh-plugin-console', currentVersion: '0.2.1', currentSpec: '0.2.1',
+      targetVersion: '0.2.2', sourceSpec: 'dsh-plugin-console@0.2.2', artifactIntegrity: null, lifecycleScripts: [],
+      warnings: ['trusted-code', 'restart-required', 'scripts-disabled', 'canary-validation'],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    } as const
+    const execute = vi.fn(async () => ({
+      status: 'succeeded', code: 'succeeded', action: 'update', packageName: 'dsh-plugin-console',
+      restartRequired: true, activation: 'pending-restart', canary: 'passed', processCleanup: 'succeeded',
+      rollback: 'not-needed', detail: null, installed, capabilities,
+    }))
+    const api = {
+      bootstrap: async () => ({ catalog, installed, capabilities }),
+      listCatalog: async () => catalog,
+      refreshCatalog: async () => catalog,
+      catalogDetail: async () => null,
+      installed: async () => installed,
+      installedDetail: async () => null,
+      capabilities: async () => capabilities,
+      plan: async () => plan,
+      execute,
+    }
+    render(<PluginManageSettingsTab {...({ api, locale: () => 'en', t } as any)} />)
+    fireEvent.click(await screen.findByRole('button', { name: /Installed/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Update Plugin manager' }))
     await waitFor(() => expect(execute).toHaveBeenCalledTimes(1))
   })
 

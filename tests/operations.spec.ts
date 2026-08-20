@@ -1,7 +1,7 @@
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { ProfileOperations } from '../src/operations.ts'
 import type { OperationResult } from '../src/types.ts'
 
@@ -783,6 +783,39 @@ describe('profile operations', () => {
     const plan = await manager.plan({ action: 'remove', packageName: '@deepseek-ai/dsh-base' })
     expect(plan.status).toBe('blocked')
     expect(plan.blockReason).toBe('system-package-protected')
+  })
+
+  it('rejects an update while the previous profile change awaits restart', async () => {
+    const profile = profileStub()
+    profile.list = async () => [{
+      packageName: 'demo-plugin', requestedSpec: '1.0.0', version: '1.0.0', description: 'Demo',
+      author: null, license: 'MIT', homepage: null, repositoryUrl: 'https://github.com/acme/demo-plugin',
+      system: false, directDependency: true, bundle: true, client: false,
+      activeAtLaunch: true, activeAfterRestart: true, state: 'pending-update', runtimeEntries: [],
+      latestVersion: '1.2.0', updateAvailable: true, updateCheckError: null, catalogId: 'acme/demo-plugin',
+    }]
+    const manager = new ProfileOperations({ profile, catalog: catalogStub(), dshBin: 'dsh' })
+    const plan = await manager.plan({ action: 'update', catalogId: 'acme/demo-plugin', packageName: 'demo-plugin' })
+    expect(plan).toMatchObject({ status: 'blocked', blockReason: 'restart-required-before-next-change' })
+  })
+
+  it('rejects a pause plan when its same-version source changes before execution', async () => {
+    const profile = profileStub()
+    let requestedSpec = `github:acme/demo-plugin#${'a'.repeat(40)}`
+    profile.list = async () => [{
+      packageName: 'demo-plugin', requestedSpec, version: '1.2.0', description: 'Demo',
+      author: null, license: 'MIT', homepage: null, repositoryUrl: 'https://github.com/acme/demo-plugin',
+      system: false, directDependency: true, bundle: true, client: false,
+      activeAtLaunch: true, activeAfterRestart: true, state: 'active', runtimeEntries: [{ entryId: 'demo', enabled: true, phase: 'active' }],
+      latestVersion: null, updateAvailable: false, updateCheckError: null, catalogId: 'acme/demo-plugin',
+    }]
+    const setPluginPaused = vi.fn(async () => [{ id: 'demo', name: 'demo-plugin' }])
+    profile.setPluginPaused = setPluginPaused
+    const manager = new ProfileOperations({ profile, catalog: catalogStub(), dshBin: 'dsh' })
+    const plan = await manager.plan({ action: 'pause', packageName: 'demo-plugin' })
+    requestedSpec = `github:acme/demo-plugin#${'b'.repeat(40)}`
+    expect(await manager.execute(plan.planId as string)).toMatchObject({ status: 'failed', code: 'plan-state-changed' })
+    expect(setPluginPaused).not.toHaveBeenCalled()
   })
 
   it('fails and rolls back when the composed pause target does not match', async () => {

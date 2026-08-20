@@ -1,8 +1,10 @@
-# v0.2.1 Release Status
+# v0.2.2 Release Status
 
 Repository: https://github.com/AlexYin-Tongji/dsh-plugin-console
 
-Status: **release candidate verified; awaiting `main` and `v0.2.1` push**
+Status: **release candidate verified; awaiting `v0.2.2` push and tag**
+
+`v0.2.1` is committed and pushed at `d745a56`, but its first Release workflow run was blocked before publication because the runner did not have the DSH CLI required by the new Canary tests. The workflow fix in `0.2.2` installs `@deepseek-ai/dsh@0.1.0-rc.6` and supports retrying an existing tag.
 
 ## Stability Fix
 
@@ -21,15 +23,15 @@ Status: **release candidate verified; awaiting `main` and `v0.2.1` push**
 
 - Strict TypeScript checking passes.
 - Host and browser client bundles build successfully.
-- All 58 tests pass across eleven test files.
+- All 75 tests pass across eleven test files; `0.2.2` adds one-click update, self-update, pending-state rejection, and same-version source-change recovery coverage.
 - Real DSH integration tests cover canary pass, initialization crash, version mismatch, configuration-only bundles, Web client bundles, unrelated-plugin isolation, process-tree cleanup, successful update, and failed-update rollback.
 - The active local Web profile passes the isolated canary without changing its metadata or source dependency tree and leaves no process or temporary-directory residue.
-- The packed `dsh-plugin-console-0.2.1.tgz` installs in a fresh DSH Web profile and passes its own isolated canary.
+- The packed `dsh-plugin-console-0.2.2.tgz` installs in a fresh DSH Web profile and appears in the composed profile.
 
 ## Remaining Release Work
 
-1. Push the release commit and annotated tag `v0.2.1`.
-2. Confirm the GitHub Release workflow publishes `dsh-plugin-console@0.2.1`.
-3. Create the GitHub Release and attach `dsh-plugin-console-0.2.1.tgz`.
+1. Push the release commit and annotated tag `v0.2.2`.
+2. Confirm the GitHub Release workflow publishes `dsh-plugin-console@0.2.2`.
+3. Retry `v0.2.1` from Actions with `release_ref=v0.2.1`, then create its GitHub Release if it is still desired.
 
 The community entry was merged in [`awesome-dsh-plugin#1830`](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/1830) and follows npm latest automatically.

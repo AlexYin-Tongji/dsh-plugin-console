@@ -136,6 +136,19 @@ function reasonLabel(reason: string | null, t: Translate): string {
     case 'installed-version-invalid': return t('reasonVersion')
     case 'plan-state-changed': return t('reasonState')
     case 'profile-manifest-repair-failed': return t('reasonManifestRepair')
+    case 'operation-timeout': return t('reasonOperationTimeout')
+    case 'dsh-command-failed': return t('reasonCommandFailed')
+    case 'dsh-command-indeterminate': return t('reasonCommandIndeterminate')
+    case 'backup-failed': return t('reasonBackupFailed')
+    case 'mutation-snapshot-failed': return t('reasonBackupFailed')
+    case 'post-install-validation-failed': return t('reasonValidationFailed')
+    case 'activation-change-failed': return t('reasonValidationFailed')
+    case 'catalog-entry-required': return t('reasonCatalogRequired')
+    case 'catalog-entry-missing': return t('reasonCatalogMissing')
+    case 'plan-invalid-or-expired': return t('reasonPlanExpired')
+    case 'plan-expired': return t('reasonPlanExpired')
+    case 'plan-invalid': return t('reasonPlanExpired')
+    case 'operation-busy': return t('reasonBusy')
     case 'composition-validation-failed': return t('reasonState')
     case 'activation-validation-failed': return t('reasonState')
     default: return reason ?? t('reasonGeneric')
@@ -207,7 +220,7 @@ function CatalogRow({
 }): ReactNode {
   const canInstall = installed === undefined && !working
   return <li className={css.row}>
-    <button className={css.rowOpen} type="button" onClick={onOpen}>
+    <button className={css.rowOpen} type="button" disabled={working} onClick={onOpen}>
       <OwnerAvatar owner={item.owner} name={item.name} />
       <span className={css.rowBody}>
         <span className={css.rowHeading}>
@@ -229,7 +242,7 @@ function CatalogRow({
           <IconDownloadOutline16 aria-hidden="true" />{working ? t('installing') : t('install')}
         </button>
       ) : (
-        <button className={css.ghostButton} type="button" onClick={onOpen}>{t('details')}</button>
+        <button className={css.ghostButton} type="button" disabled={working} onClick={onOpen}>{t('details')}</button>
       )}
     </span>
   </li>
@@ -262,7 +275,7 @@ function InstalledRow({
   const canToggle = item.packageName !== 'dsh-plugin-console'
     && item.directDependency && !item.system && !working && !pending && item.runtimeEntries.length > 0
   return <li className={css.row}>
-    <button className={css.rowOpen} type="button" onClick={onOpen}>
+    <button className={css.rowOpen} type="button" disabled={working} onClick={onOpen}>
       <OwnerAvatar owner={item.repositoryUrl?.split('/')[3] ?? ''} name={item.packageName} />
       <span className={css.rowBody}>
         <span className={css.rowHeading}>
@@ -282,9 +295,9 @@ function InstalledRow({
     <span className={css.iconActions}>
       {canToggle && !paused ? <button className={css.iconButton} type="button" title={t('ariaPause')} aria-label={t('ariaPause')} onClick={onPause}><IconPauseOutline16 aria-hidden="true" /></button> : null}
       {canToggle && paused ? <button className={css.iconButton} type="button" title={t('ariaResume')} aria-label={t('ariaResume')} onClick={onResume}><IconPlayOutline16 aria-hidden="true" /></button> : null}
-      {canUpdate ? <button className={css.iconButton} type="button" title={t('ariaUpdate')} aria-label={t('ariaUpdate')} onClick={onUpdate}><IconRefreshOutline16 aria-hidden="true" /></button> : null}
+      {canUpdate ? <button className={css.iconButton} type="button" title={item.packageName === 'dsh-plugin-console' ? t('ariaUpdateManager') : t('ariaUpdate')} aria-label={item.packageName === 'dsh-plugin-console' ? t('ariaUpdateManager') : t('ariaUpdate')} onClick={onUpdate}><IconRefreshOutline16 aria-hidden="true" /></button> : null}
       {canRemove ? <button className={css.iconButtonDanger} type="button" title={t('ariaRemove')} aria-label={t('ariaRemove')} onClick={onRemove}><IconTrashOutline16 aria-hidden="true" /></button> : null}
-      <button className={css.ghostButton} type="button" onClick={onOpen}>{t('details')}</button>
+      <button className={css.ghostButton} type="button" disabled={working} onClick={onOpen}>{t('details')}</button>
     </span>
   </li>
 }
@@ -382,7 +395,7 @@ function ReviewDialog({
     <div ref={modalRef} className={css.modal} role="dialog" aria-modal="true" aria-labelledby={titleId}>
       <div className={css.modalHeader}>
         <h3 id={titleId}>{t('reviewTitle')}</h3>
-        <button ref={closeRef} className={css.iconButton} type="button" title={t('close')} aria-label={t('close')} onClick={onCancel}><IconCloseOutline16 aria-hidden="true" /></button>
+        <button ref={closeRef} className={css.iconButton} type="button" disabled={working} title={t('close')} aria-label={t('close')} onClick={onCancel}><IconCloseOutline16 aria-hidden="true" /></button>
       </div>
       <p className={css.modalLead}>{review.title}</p>
       <dl className={css.metaGrid}>
@@ -425,7 +438,7 @@ function CatalogDetailView({
 }): ReactNode {
   const description = localizedDescription(detail.description, language)
   return <section className={css.detail}>
-    <button className={css.backButton} type="button" onClick={onBack}><IconChevronLeftOutline14 aria-hidden="true" />{t('back')}</button>
+    <button className={css.backButton} type="button" disabled={working} onClick={onBack}><IconChevronLeftOutline14 aria-hidden="true" />{t('back')}</button>
     <div className={css.detailHeader}>
       <OwnerAvatar owner={detail.owner} name={detail.name} />
       <div className={css.detailTitle}>
@@ -476,10 +489,12 @@ function InstalledDetailView({
   readonly onResume: () => void
 }): ReactNode {
   const paused = detail.state === 'paused' || detail.state === 'partially-paused'
+  const pending = detail.state.startsWith('pending-')
+  const canUpdate = detail.updateAvailable && !working && !pending && !detail.system && detail.directDependency
   const canToggle = detail.packageName !== 'dsh-plugin-console'
     && !detail.system && detail.directDependency && !detail.state.startsWith('pending-') && detail.runtimeEntries.length > 0
   return <section className={css.detail}>
-    <button className={css.backButton} type="button" onClick={onBack}><IconChevronLeftOutline14 aria-hidden="true" />{t('back')}</button>
+    <button className={css.backButton} type="button" disabled={working} onClick={onBack}><IconChevronLeftOutline14 aria-hidden="true" />{t('back')}</button>
     <div className={css.detailHeader}>
       <OwnerAvatar owner={detail.repositoryUrl?.split('/')[3] ?? ''} name={detail.packageName} />
       <div className={css.detailTitle}><h3>{detail.packageName}</h3><p>{statusLabel(detail.state, t)}</p></div>
@@ -495,7 +510,7 @@ function InstalledDetailView({
     <div className={css.detailActionRow}>
       {canToggle && !paused ? <button className={css.ghostButton} type="button" disabled={working} onClick={onPause}><IconPauseOutline16 aria-hidden="true" />{working ? t('pausing') : t('pause')}</button> : null}
       {canToggle && paused ? <button className={css.ghostButton} type="button" disabled={working} onClick={onResume}><IconPlayOutline16 aria-hidden="true" />{working ? t('resuming') : t('resume')}</button> : null}
-      {detail.updateAvailable ? <button className={css.primaryButton} type="button" disabled={working} onClick={onUpdate}><IconRefreshOutline16 aria-hidden="true" />{working ? t('updating') : t('update')}</button> : null}
+      {canUpdate ? <button className={css.primaryButton} type="button" disabled={working} onClick={onUpdate}><IconRefreshOutline16 aria-hidden="true" />{working ? t('updating') : t('update')}</button> : null}
       {!detail.system && detail.directDependency && detail.state !== 'pending-removal' && detail.state !== 'pending-update' ? <button className={css.dangerButton} type="button" disabled={working} onClick={onRemove}><IconTrashOutline16 aria-hidden="true" />{working ? t('removing') : t('remove')}</button> : null}
       {detail.updateCheckError ? <span className={css.muted}>{t('checkFailed')}</span> : null}
     </div>
@@ -585,7 +600,29 @@ export function PluginManageSettingsTab({ api, locale, t }: PluginManageSettings
   const openInstalled = (packageName: string): void => { setView('installed'); setSelection({ kind: 'installed', packageName }); setOperationError(null) }
   const closeDetail = (): void => { setSelection(null); setOperationError(null) }
 
-  const startPlan = (requestToPlan: OperationPlanRequest, title: string): void => {
+  const applyOperationResult = (result: OperationResult, sequence: number): void => {
+    if (!alive.current || sequence !== operationSequence.current) return
+    setInstalled(result.installed)
+    setCapabilities(result.capabilities)
+    void api.installed(language).then(value => {
+      if (alive.current && sequence === operationSequence.current) setInstalled(value)
+    }).catch(() => undefined)
+    setReview(null)
+    if (result.status === 'succeeded') {
+      setBanner(t(result.canary === 'passed'
+        ? 'canaryPassedBanner'
+        : result.action === 'remove'
+          ? 'removeRestartBanner'
+          : 'restartBanner'))
+      setSelection(null)
+    } else {
+      const reason = result.detail ?? reasonLabel(result.code, t)
+      const message = result.rollback === 'failed' ? `${reason} ${t('rollbackFailed')}` : reason
+      setOperationError(interpolate(t('operationFailed', { message: '' }), { message }))
+    }
+  }
+
+  const startPlan = (requestToPlan: OperationPlanRequest, title: string, immediate = false): void => {
     const sequence = ++operationSequence.current
     setWorking(true)
     setOperationError(null)
@@ -593,6 +630,8 @@ export function PluginManageSettingsTab({ api, locale, t }: PluginManageSettings
       if (!alive.current || sequence !== operationSequence.current) return
       if (plan.status === 'blocked') {
         setOperationError(interpolate(t('blocked', { reason: '' }), { reason: reasonLabel(plan.blockReason, t) }))
+      } else if (immediate && plan.planId !== null) {
+        return api.execute(plan.planId).then(result => { applyOperationResult(result, sequence) })
       } else {
         setReview({ plan, title })
       }
@@ -607,24 +646,7 @@ export function PluginManageSettingsTab({ api, locale, t }: PluginManageSettings
     const sequence = ++operationSequence.current
     const planId = review.plan.planId
     setWorking(true)
-    void api.execute(planId).then((result: OperationResult) => {
-      if (!alive.current || sequence !== operationSequence.current) return
-      setInstalled(result.installed)
-      setCapabilities(result.capabilities)
-      setReview(null)
-      if (result.status === 'succeeded') {
-        setBanner(t(result.canary === 'passed'
-          ? 'canaryPassedBanner'
-          : result.action === 'remove'
-            ? 'removeRestartBanner'
-            : 'restartBanner'))
-        setSelection(null)
-      } else {
-        const reason = result.detail ?? reasonLabel(result.code, t)
-        const message = result.rollback === 'failed' ? `${reason} ${t('rollbackFailed')}` : reason
-        setOperationError(interpolate(t('operationFailed', { message: '' }), { message }))
-      }
-    }).catch((error: unknown) => {
+    void api.execute(planId).then(result => { applyOperationResult(result, sequence) }).catch((error: unknown) => {
       if (!alive.current || sequence !== operationSequence.current) return
       setOperationError(interpolate(t('operationFailed', { message: '' }), { message: error instanceof Error ? error.message : String(error) }))
     }).finally(() => { if (alive.current && sequence === operationSequence.current) setWorking(false) })
@@ -658,8 +680,8 @@ export function PluginManageSettingsTab({ api, locale, t }: PluginManageSettings
       </span>
     </header>
     <div className={css.viewTabs} aria-label={t('tab')}>
-      <button className={css.viewTab} type="button" aria-pressed={view === 'store'} data-active={view === 'store' ? 'true' : undefined} onClick={() => { setView('store'); setSelection(null) }}>{t('store')}</button>
-      <button className={css.viewTab} type="button" aria-pressed={view === 'installed'} data-active={view === 'installed' ? 'true' : undefined} onClick={() => { setView('installed'); setSelection(null) }}>{t('installed')} <span className={css.tabCount}>{installed.length}</span></button>
+      <button className={css.viewTab} type="button" disabled={working} aria-pressed={view === 'store'} data-active={view === 'store' ? 'true' : undefined} onClick={() => { setView('store'); setSelection(null) }}>{t('store')}</button>
+      <button className={css.viewTab} type="button" disabled={working} aria-pressed={view === 'installed'} data-active={view === 'installed' ? 'true' : undefined} onClick={() => { setView('installed'); setSelection(null) }}>{t('installed')} <span className={css.tabCount}>{installed.length}</span></button>
     </div>
     {banner ? <div className={css.banner} role="status"><span>{banner}</span><button className={css.iconButton} type="button" title={t('close')} aria-label={t('close')} onClick={() => setBanner(null)}><IconCloseOutline16 aria-hidden="true" /></button></div> : null}
     {operationError ? <div className={css.errorBanner} role="alert"><span>{operationError}</span><button className={css.iconButton} type="button" title={t('close')} aria-label={t('close')} onClick={() => setOperationError(null)}><IconCloseOutline16 aria-hidden="true" /></button></div> : null}
@@ -667,11 +689,11 @@ export function PluginManageSettingsTab({ api, locale, t }: PluginManageSettings
     {load.status === 'error' ? <div className={css.failure} role="alert"><span>{load.message ?? t('error')}</span><button className={css.ghostButton} type="button" onClick={() => setReload(value => value + 1)}>{t('retry')}</button></div> : null}
     {selection !== null ? (
       detail.status === 'loading' ? <p className={css.status}>{t('loading')}</p>
-        : detail.status === 'error' ? <div className={css.failure}><span>{detail.message ?? t('error')}</span><button className={css.ghostButton} type="button" onClick={() => setSelection({ ...selection })}>{t('retry')}</button></div>
+        : detail.status === 'error' ? <div className={css.failure} role="alert"><span>{detail.message ?? t('error')}</span><button className={css.ghostButton} type="button" onClick={() => setSelection({ ...selection })}>{t('retry')}</button></div>
           : detail.status === 'ready' && storeDetail !== null ? <CatalogDetailView detail={storeDetail} language={language} t={t} working={working} onBack={closeDetail} onInstall={() => startPlan({ action: 'install', catalogId: storeDetail.id }, t('reviewInstall'))} />
             : detail.status === 'ready' && installedDetail !== null ? <InstalledDetailView detail={installedDetail} t={t} working={working} onBack={closeDetail} onUpdate={() => installedDetail.catalogId !== null
-        ? startPlan({ action: 'update', catalogId: installedDetail.catalogId, packageName: installedDetail.packageName }, t('reviewUpdate'))
-        : startPlan({ action: 'update', packageName: installedDetail.packageName }, t('reviewUpdate'))} onRemove={() => startPlan({ action: 'remove', packageName: installedDetail.packageName }, t('reviewRemove'))}
+        ? startPlan({ action: 'update', catalogId: installedDetail.catalogId, packageName: installedDetail.packageName }, t('reviewUpdate'), true)
+        : startPlan({ action: 'update', packageName: installedDetail.packageName }, t('reviewUpdate'), true)} onRemove={() => startPlan({ action: 'remove', packageName: installedDetail.packageName }, t('reviewRemove'))}
                onPause={() => startPlan({ action: 'pause', packageName: installedDetail.packageName }, t('reviewPause'))}
                onResume={() => startPlan({ action: 'resume', packageName: installedDetail.packageName }, t('reviewResume'))} />
               : <p className={css.status}>{t('error')}</p>
@@ -681,10 +703,10 @@ export function PluginManageSettingsTab({ api, locale, t }: PluginManageSettings
           <label className={css.search}>
             <IconSearchOutline16 aria-hidden="true" />
             <span className={css.visuallyHidden}>{t('ariaSearch')}</span>
-            <input type="search" value={query} placeholder={t('search')} aria-label={t('ariaSearch')} onChange={event => { setQuery(event.currentTarget.value); setPage(1) }} />
+            <input type="search" disabled={working} value={query} placeholder={t('search')} aria-label={t('ariaSearch')} onChange={event => { setQuery(event.currentTarget.value); setPage(1) }} />
           </label>
-          <label className={css.selectLabel}><span>{t('category')}</span><select value={category} onChange={event => { setCategory(event.currentTarget.value); setPage(1) }}><option value="all">{t('allCategories')}</option>{categories.map(item => <option key={item.id} value={item.id}>{categoryLabel(item.id, t)} ({item.count})</option>)}</select></label>
-          <button className={css.iconButton} type="button" disabled={working} title={t('ariaRefresh')} aria-label={t('ariaRefresh')} onClick={refresh}><IconRefreshOutline16 aria-hidden="true" /></button>
+          <label className={css.selectLabel}><span>{t('category')}</span><select disabled={working} value={category} onChange={event => { setCategory(event.currentTarget.value); setPage(1) }}><option value="all">{t('allCategories')}</option>{categories.map(item => <option key={item.id} value={item.id}>{categoryLabel(item.id, t)} ({item.count})</option>)}</select></label>
+          <button className={css.iconButton} type="button" disabled={working || load.status !== 'ready'} title={t('ariaRefresh')} aria-label={t('ariaRefresh')} onClick={refresh}><IconRefreshOutline16 aria-hidden="true" /></button>
         </div>
         {catalog?.status.stale ? <p className={css.stale}>{t('stale')}</p> : null}
         {catalog?.status.state === 'unavailable' ? <p className={css.status}>{t('catalogUnavailable')}</p> : null}
@@ -692,15 +714,15 @@ export function PluginManageSettingsTab({ api, locale, t }: PluginManageSettings
         {catalog !== null && catalog.items.length > 0 ? <>
           <div className={css.listHeader}><span>{interpolate(t('catalogCount', { count: catalog.total }), { count: catalog.total })}</span><span>{catalog.status.source === 'network' ? t('sourceNetwork') : catalog.status.source === 'cache' ? t('sourceCache') : t('sourceNone')}</span></div>
           <ul className={css.list}>{catalog.items.map(item => <CatalogRow key={item.id} item={item} installed={installedByCatalog.get(item.id)} language={language} t={t} onOpen={() => openStore(item.id)} onInstall={() => startPlan({ action: 'install', catalogId: item.id }, t('reviewInstall'))} working={working} />)}</ul>
-          <Pagination page={catalog.page} pages={pages} t={t} onPage={setPage} />
+          <Pagination page={catalog.page} pages={pages} t={t} onPage={setPage} disabled={working} />
         </> : null}
       </section>
     ) : (
       <section className={css.catalogView} aria-label={t('ariaInstalled')}>
-        <div className={css.listHeader}><span>{interpolate(t('installedCount', { count: installed.length }), { count: installed.length })}</span><button className={css.ghostButton} type="button" disabled={working} onClick={() => setReload(value => value + 1)}>{t('refresh')}</button></div>
+        <div className={css.listHeader}><span>{interpolate(t('installedCount', { count: installed.length }), { count: installed.length })}</span><button className={css.ghostButton} type="button" disabled={working || load.status !== 'ready'} onClick={() => setReload(value => value + 1)}>{t('refresh')}</button></div>
         {installed.length === 0 ? <p className={css.status}>{t('noPlugins')}</p> : <ul className={css.list}>{installed.map(item => <InstalledRow key={item.packageName} item={item} t={t} onOpen={() => openInstalled(item.packageName)} onUpdate={() => item.catalogId !== null
-              ? startPlan({ action: 'update', catalogId: item.catalogId, packageName: item.packageName }, t('reviewUpdate'))
-              : startPlan({ action: 'update', packageName: item.packageName }, t('reviewUpdate'))} onRemove={() => startPlan({ action: 'remove', packageName: item.packageName }, t('reviewRemove'))}
+              ? startPlan({ action: 'update', catalogId: item.catalogId, packageName: item.packageName }, t('reviewUpdate'), true)
+              : startPlan({ action: 'update', packageName: item.packageName }, t('reviewUpdate'), true)} onRemove={() => startPlan({ action: 'remove', packageName: item.packageName }, t('reviewRemove'))}
               onPause={() => startPlan({ action: 'pause', packageName: item.packageName }, t('reviewPause'))}
               onResume={() => startPlan({ action: 'resume', packageName: item.packageName }, t('reviewResume'))} working={working} />)}</ul>}
       </section>
@@ -709,11 +731,11 @@ export function PluginManageSettingsTab({ api, locale, t }: PluginManageSettings
   </div>
 }
 
-function Pagination({ page, pages, t, onPage }: { readonly page: number; readonly pages: number; readonly t: Translate; readonly onPage: (page: number) => void }): ReactNode {
+function Pagination({ page, pages, t, onPage, disabled }: { readonly page: number; readonly pages: number; readonly t: Translate; readonly onPage: (page: number) => void; readonly disabled: boolean }): ReactNode {
   if (pages <= 1) return null
   return <nav className={css.pagination} aria-label={t('page', { page, pages })}>
-    <button className={css.iconButton} type="button" disabled={page <= 1} title={t('previous')} aria-label={t('previous')} onClick={() => onPage(page - 1)}><IconChevronLeftOutline14 aria-hidden="true" /></button>
+    <button className={css.iconButton} type="button" disabled={disabled || page <= 1} title={t('previous')} aria-label={t('previous')} onClick={() => onPage(page - 1)}><IconChevronLeftOutline14 aria-hidden="true" /></button>
     <span>{interpolate(t('page', { page, pages }), { page, pages })}</span>
-    <button className={css.iconButton} type="button" disabled={page >= pages} title={t('next')} aria-label={t('next')} onClick={() => onPage(page + 1)}><IconChevronRightOutline14 aria-hidden="true" /></button>
+    <button className={css.iconButton} type="button" disabled={disabled || page >= pages} title={t('next')} aria-label={t('next')} onClick={() => onPage(page + 1)}><IconChevronRightOutline14 aria-hidden="true" /></button>
   </nav>
 }

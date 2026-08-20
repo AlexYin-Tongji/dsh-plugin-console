@@ -61,7 +61,13 @@ export async function acquireProfileLock(profileDir: string): Promise<() => Prom
       const current = await owner(ownerPath)
       if (current !== null && pidAlive(current.pid)) throw new ProfileLockedError()
       if (current === null) {
-        const info = await stat(lockDir)
+        let info
+        try {
+          info = await stat(lockDir)
+        } catch (statError) {
+          if ((statError as NodeJS.ErrnoException).code === 'ENOENT') continue
+          throw statError
+        }
         if (Date.now() - info.mtimeMs < OWNERLESS_STALE_MS) throw new ProfileLockedError()
       }
       // Claim the exact stale directory before removing it. Deleting lockDir

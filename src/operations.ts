@@ -8,7 +8,6 @@ import { randomUUID } from 'node:crypto'
 import { access, mkdtemp, readFile, rename, rm } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
-import { setTimeout as delay } from 'node:timers/promises'
 import semver from 'semver'
 import { isSeq, parse as parseYaml, parseDocument, type ScalarTag } from 'yaml'
 import type { NpmArtifact, PluginCatalog } from './catalog.ts'
@@ -181,10 +180,12 @@ async function command(
     if (stderr.length > MAX_OUTPUT_CHARS) stderr = stderr.slice(-MAX_OUTPUT_CHARS)
   })
   const exited = processExit(child, error => { startError = error })
-  const exit = await Promise.race([
-    exited,
-    delay(timeoutMs).then(() => null),
-  ])
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<null>(resolve => {
+    timeoutHandle = setTimeout(() => resolve(null), timeoutMs)
+  })
+  const exit = await Promise.race([exited, timeout])
+  if (timeoutHandle !== undefined) clearTimeout(timeoutHandle)
   let timedOut = false
   let processCleanup = true
   if (exit === null) {
@@ -650,6 +651,9 @@ export class ProfileOperations {
     if (request.action === 'update') {
       if (row === undefined) return emptyPlan(this.options.profile.runtime.profileName, request.action, 'package-not-installed', resolvedPackageName, catalogId)
       if (!row.directDependency) return emptyPlan(this.options.profile.runtime.profileName, request.action, 'system-package-protected', resolvedPackageName, catalogId)
+      if (row.state === 'pending-install' || row.state === 'pending-update' || row.state === 'pending-removal') {
+        return emptyPlan(this.options.profile.runtime.profileName, request.action, 'restart-required-before-next-change', resolvedPackageName, catalogId)
+      }
       if (artifact !== null && (row.repositoryUrl === null || row.repositoryUrl.toLocaleLowerCase() !== artifact.repositoryUrl.toLocaleLowerCase())) {
         return emptyPlan(this.options.profile.runtime.profileName, request.action, 'artifact-repository-mismatch', resolvedPackageName, catalogId)
       }
@@ -739,7 +743,7 @@ export class ProfileOperations {
     // Reserve synchronously before any filesystem or process await. A second
     // request in the same turn therefore cannot enter the mutation path.
     this.options.profile.setBusy(true)
-    const operation = this.prepareAndRun(plan)
+    const operation = this.prepareAndRun(plan, stored.fingerprint)
       .then(result => ({
         ...result,
         capabilities: { ...result.capabilities, busy: false },
@@ -762,7 +766,10 @@ export class ProfileOperations {
     ])
   }
 
-  private async prepareAndRun(plan: OperationPlan & { readonly status: 'ready' }): Promise<OperationResult> {
+  private async prepareAndRun(
+    plan: OperationPlan & { readonly status: 'ready' },
+    fingerprint: string,
+  ): Promise<OperationResult> {
     let release: (() => Promise<void>) | null = null
     try {
       release = await this.lockProfile(this.options.profile.runtime.dir)
@@ -771,6 +778,9 @@ export class ProfileOperations {
       return snapshotResult(this.options.profile, plan.action, code, plan.packageName, false, 'not-needed', errorMessage(error))
     }
     try {
+      if (fingerprint !== this.options.profile.fingerprint()) {
+        return snapshotResult(this.options.profile, plan.action, 'profile-changed', plan.packageName, false, 'not-needed', null)
+      }
       if (!(await this.planStillTargetsCurrentState(plan))) {
         return snapshotResult(this.options.profile, plan.action, 'plan-state-changed', plan.packageName, false, 'not-needed', null)
       }
@@ -799,7 +809,7 @@ export class ProfileOperations {
     if (plan.action === 'pause' || plan.action === 'resume') {
       const rows = await this.options.profile.list('zh', false)
       const row = rows.find(item => item.packageName === plan.packageName)
-      if (row === undefined || !row.directDependency || row.system || row.version !== plan.currentVersion) return false
+      if (row === undefined || !row.directDependency || row.system || row.version !== plan.currentVersion || row.requestedSpec !== plan.currentSpec) return false
       if (row.runtimeEntries.length === 0) return false
       const paused = row.state === 'paused' || row.state === 'partially-paused'
       return plan.action === 'pause' ? !paused : paused
@@ -807,7 +817,7 @@ export class ProfileOperations {
     if (plan.action === 'remove') {
       const rows = await this.options.profile.list('zh', false)
       const row = rows.find(item => item.packageName === plan.packageName)
-      return row !== undefined && row.directDependency && !row.system && row.version === plan.currentVersion
+      return row !== undefined && row.directDependency && !row.system && row.version === plan.currentVersion && row.requestedSpec === plan.currentSpec
     }
     if (plan.catalogId !== null) {
       const detail = await this.options.catalog.detail(plan.catalogId, 'en', true)

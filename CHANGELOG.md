@@ -2,6 +2,20 @@
 
 All notable changes to DSH Plugin Console are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] - 2026-08-20
+
+### Added
+
+- One-click updates for installed community plugins and `dsh-plugin-console` itself; the existing canary, profile lock, stale-plan checks and rollback remain on the execution path, followed by the normal restart notice.
+- GitHub CI and release jobs install the pinned DSH CLI required by the isolated activation tests; release runs can be manually retried against an existing `v*` tag.
+
+### Fixed
+
+- Preserve update discovery after an operation by refreshing the installed projection instead of replacing it with a snapshot that omits latest-version data.
+- Reject updates against pending profile changes and stale pause/remove plans whose requested source changed at the same version.
+- Bound npm registry metadata responses, clean command timeout timers, terminate timed-out capability probes, and prevent catalog refresh from racing initial bootstrap.
+- Localize common command, plan, catalog and recovery failure states instead of exposing internal error codes.
+
 ## [0.2.1] - 2026-08-19
 
 ### Added
@@ -15,7 +29,7 @@ All notable changes to DSH Plugin Console are documented here. The project follo
 - The canary now evaluates the complete composed profile, so initialization conflicts with existing third-party bundles are treated as update failures; uncertain recovery retains the original dependency snapshot for inspection.
 - Profile locks reclaim stale directories atomically, and metadata recovery uses atomic writes.
 - Removal now verifies that the package is gone from both profile dependencies and `dsh.profile.bundles`, repairing stale bundle entries left by older or replaced DSH launchers; any repair or composition failure restores the previous profile state.
-- Removal success now explains that the running Host and browser still hold their startup module graph and must be restarted/refreshed; update discovery remains read-only and every install/update requires the visible review and confirmation controls.
+- Removal success now explains that the running Host and browser still hold their startup module graph and must be restarted/refreshed; update discovery remains read-only, while installs retain visible review and confirmation controls and updates use the explicit update button as consent.
 
 ## [0.2.0] - 2026-08-19
 

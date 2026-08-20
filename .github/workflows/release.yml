@@ -4,13 +4,19 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: Existing v* tag to publish or retry
+        required: true
+        type: string
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.release_ref || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -19,6 +25,8 @@ jobs:
     environment: npm
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_ref || github.ref }}
       - uses: pnpm/action-setup@v4
         with:
           version: 11.22.0
@@ -27,10 +35,14 @@ jobs:
           node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
+      - run: npm install --global @deepseek-ai/dsh@0.1.0-rc.6
+      - run: dsh --version
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm run release:verify
       - name: Verify tag matches package version
-        run: node -e "const p=require('./package.json'); if ('v'+p.version !== process.env.GITHUB_REF_NAME) process.exit(1)"
+        env:
+          RELEASE_TAG: ${{ inputs.release_ref || github.ref_name }}
+        run: node -e "const p=require('./package.json'); if ('v'+p.version !== process.env.RELEASE_TAG) process.exit(1)"
       - name: Check whether npm version already exists
         id: npm-version
         run: |

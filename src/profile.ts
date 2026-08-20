@@ -20,13 +20,15 @@ import type {
   RuntimePhase,
   UiLocale,
 } from './types.ts'
-import { errorMessage, isRecord, normalizeGithubRepository, readTextBounded, stringValue, writeFileAtomic } from './util.ts'
+import { errorMessage, isRecord, normalizeGithubRepository, readResponseTextBounded, readTextBounded, stringValue, writeFileAtomic } from './util.ts'
+import { processExit, terminateProcessTree } from './process.ts'
 import type { PluginCatalog } from './catalog.ts'
 
 const PACKAGE_NAME = /^[a-z0-9][a-z0-9._~-]*$/i
 const SCOPED_PACKAGE_NAME = /^@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*$/i
 const MAX_PACKAGE_JSON_BYTES = 512_000
 const NPM_TIMEOUT_MS = 8_000
+const MAX_NPM_METADATA_BYTES = 128_000
 const NPM_CACHE_MS = 5 * 60 * 1000
 const MAX_PROFILE_PATCH_BYTES = 1_000_000
 const LIFECYCLE_SCRIPT_NAMES = ['preinstall', 'install', 'postinstall', 'prepare'] as const
@@ -277,7 +279,7 @@ async function latestNpmVersion(packageName: string, fetchImpl: typeof fetch): P
       headers: { accept: 'application/json', 'user-agent': 'dsh-plugin-console' },
     })
     if (!response.ok) return { version: null, error: `npm returned HTTP ${String(response.status)}.` }
-    const value: unknown = await response.json()
+    const value: unknown = JSON.parse(await readResponseTextBounded(response, MAX_NPM_METADATA_BYTES)) as unknown
     if (!isRecord(value) || typeof value.version !== 'string') return { version: null, error: 'npm latest metadata is invalid.' }
     return { version: value.version, error: null }
   } catch (error) {
@@ -400,21 +402,20 @@ async function writableIfPresent(path: string): Promise<boolean> {
 }
 
 async function commandAvailable(command: string): Promise<boolean> {
-  return new Promise(resolve => {
-    const child = spawn(command, ['--version'], { stdio: ['ignore', 'ignore', 'ignore'] })
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM')
-      resolve(false)
-    }, 5_000)
-    child.once('error', () => {
-      clearTimeout(timer)
-      resolve(false)
-    })
-    child.once('exit', code => {
-      clearTimeout(timer)
-      resolve(code === 0)
-    })
+  const child = spawn(command, ['--version'], {
+    detached: process.platform !== 'win32',
+    stdio: ['ignore', 'ignore', 'ignore'],
   })
+  const exited = processExit(child)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<null>(resolve => {
+    timer = setTimeout(() => resolve(null), 5_000)
+  })
+  const result = await Promise.race([exited.then(exit => exit.code === 0), timeout])
+  if (timer !== undefined) clearTimeout(timer)
+  if (result !== null) return result
+  await terminateProcessTree(child, exited, 1_000, 1_000)
+  return false
 }
 
 async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, map: (item: T) => Promise<R>): Promise<R[]> {
