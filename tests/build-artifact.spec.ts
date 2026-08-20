@@ -37,9 +37,8 @@ describe('built client artifact', () => {
       if (id === '@deepseek-ai/dsh-client-ui-primitives') return {}
       throw new Error(`unexpected client module ${id}`)
     })
-    let injectedName: string | null = null
-    let registeredId: string | null = null
-    let registeredName: string | null = null
+    let injectedNames: string[] = []
+    const registrations: { id: string | null; name: string | null }[] = []
     exports.apply({
       effect: (factory: () => unknown) => factory(),
       locale: {
@@ -48,16 +47,16 @@ describe('built client artifact', () => {
         getLocale: () => ({ active: 'en' }),
       },
       slots: {
-        inject: (name: string, factory: () => unknown) => { injectedName = name; return factory() },
+        inject: (name: string, factory: () => unknown) => { injectedNames.push(name); return factory() },
         register: (options: { id?: string; name?: string }) => {
-          registeredId = options.id ?? null
-          registeredName = options.name ?? null
+          registrations.push({ id: options.id ?? null, name: options.name ?? null })
           return () => undefined
         },
       },
     })
-    expect(injectedName).toBe('settings.section')
-    expect(registeredName).toBe('settings.section')
-    expect(registeredId).toBe('plugin-manager')
+    expect(injectedNames).toEqual(['settings.section', 'sidebar.footer.action'])
+    expect(registrations.map(entry => entry.name)).toEqual(['settings.section', 'sidebar.footer.action'])
+    expect(registrations[0]?.id).toBe('plugin-manager')
+    expect(registrations[1]?.id).toBe('plugin-console-harness-update')
   })
 })

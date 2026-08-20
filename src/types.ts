@@ -128,6 +128,65 @@ export interface BootstrapResponse {
   readonly catalog: CatalogListResponse
   readonly installed: readonly InstalledPluginSummary[]
   readonly capabilities: ManagerCapabilities
+  readonly harness: HarnessStatus
+}
+
+/** Read-only projection of the DeepSeek Harness installation itself. */
+export interface HarnessStatus {
+  /** Version of the Harness that loaded this Host process, captured at startup. */
+  readonly currentVersion: string | null
+  /** Version currently installed at the resolved package root. */
+  readonly installedVersion: string | null
+  /** Highest version offered across the npm dist-tags. */
+  readonly latestVersion: string | null
+  /** The dist-tag channel that carries `latestVersion`. */
+  readonly updateTag: string | null
+  /** Every known dist-tag channel of the Harness package. */
+  readonly channels: readonly { readonly tag: string; readonly version: string }[]
+  /** True when the installed package is managed by npm global and an upgrade exists. */
+  readonly updateAvailable: boolean
+  /** True when the installed version differs from the running one (update applied, restart pending). */
+  readonly pendingRestart: boolean
+  /** Whether the running installation is an npm-global install that can be updated in place. */
+  readonly managed: boolean
+  readonly packageName: string
+  readonly installRoot: string | null
+  readonly prefix: string | null
+  readonly executablePath: string | null
+  readonly installMessage: string | null
+  readonly updateCheckError: string | null
+}
+
+export type HarnessUpdateWarning = 'trusted-code' | 'restart-required' | 'canary-validation'
+
+export interface HarnessUpdatePlan {
+  readonly status: 'ready' | 'blocked'
+  readonly planId: string | null
+  readonly blockReason: string | null
+  readonly currentVersion: string | null
+  readonly targetVersion: string | null
+  readonly updateTag: string | null
+  readonly installRoot: string | null
+  readonly prefix: string | null
+  readonly updateCommand: string | null
+  readonly warnings: readonly HarnessUpdateWarning[]
+  readonly expiresAt: string | null
+}
+
+export interface HarnessUpdateResult {
+  readonly status: 'succeeded' | 'failed'
+  readonly code: string
+  readonly currentVersion: string | null
+  readonly targetVersion: string | null
+  readonly restartRequired: boolean
+  readonly activation: 'unchanged' | 'pending-restart' | 'unknown'
+  readonly canary: 'not-run' | 'passed' | 'failed'
+  readonly processCleanup: 'not-needed' | 'succeeded' | 'failed'
+  readonly rollback: 'not-needed' | 'succeeded' | 'failed'
+  readonly detail: string | null
+  readonly harness: HarnessStatus
+  readonly installed: readonly InstalledPluginSummary[]
+  readonly capabilities: ManagerCapabilities
 }
 
 export type OperationAction = 'install' | 'update' | 'remove' | 'pause' | 'resume'

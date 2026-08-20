@@ -222,6 +222,50 @@ async function copyCanaryDependencies(sourceProfile: string, canaryProfile: stri
   await copyDependencyTree(join(sourceProfile, 'node_modules'), join(canaryProfile, 'node_modules'))
 }
 
+interface CanaryWorkspace {
+  readonly root: string
+  readonly profileDir: string
+  readonly cwd: string
+}
+
+/** Shared isolated-home layout for every canary flavor; cleans up on failure. */
+async function prepareCanaryWorkspace(profileDir: string, profileName: string): Promise<CanaryWorkspace> {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-plugin-console-canary-'))
+  try {
+    const canaryProfileDir = join(root, 'profiles', profileName)
+    const tempDir = join(root, 'tmp')
+    const cwd = join(root, 'workspace')
+    await Promise.all([
+      mkdir(canaryProfileDir, { recursive: true, mode: 0o700 }),
+      mkdir(tempDir, { recursive: true, mode: 0o700 }),
+      mkdir(cwd, { recursive: true, mode: 0o700 }),
+    ])
+    await copyIfPresent(join(process.cwd(), '.env'), join(cwd, '.env'))
+    for (const filename of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.patch.yml']) {
+      await copyIfPresent(join(profileDir, filename), join(canaryProfileDir, filename))
+    }
+    const homePatch = join(root, 'cordis.patch.yml')
+    await writeFile(homePatch, '[]\n', { encoding: 'utf8', mode: 0o600 })
+    const profilesRoot = dirname(profileDir)
+    if (basename(profilesRoot) === 'profiles') {
+      const sourceHome = dirname(profilesRoot)
+      await copyIfPresent(join(sourceHome, 'cordis.patch.yml'), homePatch)
+      await copyIfPresent(join(sourceHome, '.env'), join(root, '.env'))
+    }
+
+    await copyCanaryDependencies(profileDir, canaryProfileDir)
+    return { root, profileDir: canaryProfileDir, cwd }
+  } catch (error) {
+    try {
+      await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+    } catch (cleanupError) {
+      if (error instanceof CanarySetupError && error.code === 'canary-shutdown-failed') throw error
+      throw new CanarySetupError('canary-cleanup-failed', `Canary preparation failed and its temporary profile could not be removed: ${errorMessage(cleanupError)}`)
+    }
+    throw error
+  }
+}
+
 async function prepareCanaryHome(request: ActivationCanaryRequest): Promise<{
   readonly root: string
   readonly resultPath: string
@@ -229,31 +273,8 @@ async function prepareCanaryHome(request: ActivationCanaryRequest): Promise<{
   readonly cwd: string
   readonly nonce: string
 }> {
-  const root = await mkdtemp(join(tmpdir(), 'dsh-plugin-console-canary-'))
+  const { root, profileDir, cwd } = await prepareCanaryWorkspace(request.profileDir, request.profileName)
   try {
-    const profileDir = join(root, 'profiles', request.profileName)
-    const tempDir = join(root, 'tmp')
-    const cwd = join(root, 'workspace')
-    await Promise.all([
-      mkdir(profileDir, { recursive: true, mode: 0o700 }),
-      mkdir(tempDir, { recursive: true, mode: 0o700 }),
-      mkdir(cwd, { recursive: true, mode: 0o700 }),
-    ])
-    await copyIfPresent(join(process.cwd(), '.env'), join(cwd, '.env'))
-    for (const filename of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'cordis.patch.yml']) {
-      await copyIfPresent(join(request.profileDir, filename), join(profileDir, filename))
-    }
-    const homePatch = join(root, 'cordis.patch.yml')
-    await writeFile(homePatch, '[]\n', { encoding: 'utf8', mode: 0o600 })
-    const profilesRoot = dirname(request.profileDir)
-    if (basename(profilesRoot) === 'profiles') {
-      const sourceHome = dirname(profilesRoot)
-      await copyIfPresent(join(sourceHome, 'cordis.patch.yml'), homePatch)
-      await copyIfPresent(join(sourceHome, '.env'), join(root, '.env'))
-    }
-
-    await copyCanaryDependencies(request.profileDir, profileDir)
-
     const nonce = randomUUID()
     const resultPath = join(root, 'result.json')
     const probePath = join(root, 'probe.mjs')
@@ -311,8 +332,10 @@ function canaryEnvironment(root: string, nonce: string): NodeJS.ProcessEnv {
 }
 
 function startProcess(
-  request: ActivationCanaryRequest,
-  prepared: Awaited<ReturnType<typeof prepareCanaryHome>>,
+  dshBin: string,
+  profileName: string,
+  prepared: { readonly root: string; readonly patchPath: string; readonly cwd: string },
+  nonce: string,
 ): {
   readonly child: ChildProcess
   readonly exited: Promise<ProcessExit>
@@ -322,9 +345,9 @@ function startProcess(
   let stdout = ''
   let stderr = ''
   let startError: string | null = null
-  const child = spawn(request.dshBin, [
+  const child = spawn(dshBin, [
     '--profile',
-    request.profileName,
+    profileName,
     '--patch',
     prepared.patchPath,
     '--host',
@@ -334,7 +357,7 @@ function startProcess(
   ], {
     cwd: prepared.cwd,
     detached: process.platform !== 'win32',
-    env: canaryEnvironment(prepared.root, prepared.nonce),
+    env: canaryEnvironment(prepared.root, nonce),
     shell: false,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -671,7 +694,7 @@ export async function runActivationCanary(request: ActivationCanaryRequest): Pro
   let outcome: ActivationCanaryResult = { status: 'failed', code: 'canary-start-failed', detail: null }
   try {
     try {
-      running = startProcess(request, prepared)
+      running = startProcess(request.dshBin, request.profileName, prepared, prepared.nonce)
     } catch (error) {
       outcome = { status: 'failed', code: 'canary-start-failed', detail: errorMessage(error) }
     }
@@ -736,6 +759,354 @@ export async function runActivationCanary(request: ActivationCanaryRequest): Pro
       outcome = { status: 'failed', code: 'canary-shutdown-failed', detail: 'The isolated DSH process could not be terminated cleanly.' }
     } else if (!cleanup) {
       outcome = { status: 'failed', code: 'canary-cleanup-failed', detail: 'The isolated DSH process stopped, but its temporary profile could not be removed.' }
+    }
+  }
+  return outcome
+}
+
+// ---------------------------------------------------------------------------
+// Harness-update canary: boots the complete composed profile under a new
+// Harness binary and verifies EVERY installed plugin — Loader entry
+// activation, client-bundle presence/execution, and the HTTP surface — before
+// the update is accepted.
+// ---------------------------------------------------------------------------
+
+export interface HarnessCanaryRequest {
+  readonly profileDir: string
+  readonly profileName: string
+  readonly dshBin: string
+  readonly expectedEntries: readonly { readonly id: string; readonly name: string; readonly disabled: boolean | 'unknown' }[]
+  readonly expectedClientPackages: readonly string[]
+  readonly stabilityMs?: number
+  readonly timeoutMs: number
+}
+
+export interface HarnessCanaryResult {
+  readonly status: 'passed' | 'failed'
+  readonly code:
+    | 'harness-canary-passed'
+    | 'harness-canary-preparation-failed'
+    | 'harness-canary-start-failed'
+    | 'harness-canary-process-exited'
+    | 'harness-canary-timeout'
+    | 'harness-canary-composition-failed'
+    | 'harness-canary-http-failed'
+    | 'harness-canary-client-failed'
+    | 'harness-canary-shutdown-failed'
+    | 'harness-canary-cleanup-failed'
+  readonly detail: string | null
+}
+
+interface HarnessProbeEntry {
+  readonly id: string
+  readonly name: string
+  readonly disabled: boolean
+  readonly state: number | null
+  readonly missingServices: readonly string[]
+}
+
+interface HarnessProbeDocument {
+  readonly protocolVersion: 1
+  readonly nonce: string
+  readonly pid: number
+  readonly entries: readonly HarnessProbeEntry[]
+  readonly clientGraphEntries: readonly { readonly id: string; readonly url: string | null }[]
+  readonly port: number | null
+  readonly error?: string
+}
+
+const HARNESS_PROBE_SOURCE = String.raw`import { readFileSync, renameSync, writeFileSync } from 'node:fs'
+
+export const name = 'plugin-console-harness-canary-probe'
+export const inject = ['loader']
+
+function publish(path, value) {
+  const temporary = path + '.tmp'
+  writeFileSync(temporary, JSON.stringify(value))
+  renameSync(temporary, path)
+}
+
+export function apply(ctx, config) {
+  queueMicrotask(async () => {
+    const base = { protocolVersion: 1, nonce: config.nonce, pid: process.pid }
+    try {
+      await ctx.loader.await()
+      await new Promise(resolve => setImmediate(resolve))
+      const all = [...ctx.loader.entries()]
+      const entries = all
+        .filter(entry => entry.options.id !== config.probeId)
+        .map(entry => {
+          const inject = entry.fiber === undefined ? {} : entry.fiber.inject
+          return {
+            id: entry.options.id,
+            name: entry.options.name,
+            disabled: entry.disabled ?? false,
+            state: entry.fiber?.state ?? null,
+            missingServices: entry.fiber === undefined
+              ? []
+              : Object.keys(inject).filter(service => entry.fiber.ctx.get(service) === undefined),
+          }
+        })
+      const graph = ctx.get('clientModules')?.graph?.()
+      const clientGraphEntries = graph?.entries
+        ?.filter(entry => typeof entry.id === 'string')
+        .map(entry => ({ id: entry.id, url: typeof entry.url === 'string' ? entry.url : null })) ?? []
+      const port = ctx.get('webServer')?.port
+      publish(config.resultPath, {
+        ...base,
+        entries,
+        clientGraphEntries,
+        port: Number.isSafeInteger(port) ? port : null,
+      })
+    } catch (error) {
+      publish(config.resultPath, {
+        ...base,
+        entries: [],
+        clientGraphEntries: [],
+        port: null,
+        error: error instanceof Error ? error.stack ?? error.message : String(error),
+      })
+    }
+  })
+}
+
+export default { name, inject, apply }
+`
+
+async function prepareHarnessCanaryHome(profileDir: string, profileName: string): Promise<{
+  readonly root: string
+  readonly resultPath: string
+  readonly patchPath: string
+  readonly cwd: string
+  readonly nonce: string
+  readonly probeId: string
+}> {
+  const { root, cwd } = await prepareCanaryWorkspace(profileDir, profileName)
+  try {
+    const nonce = randomUUID()
+    const probeId = `plugin-console-harness-canary-${nonce}`
+    const resultPath = join(root, 'result.json')
+    const probePath = join(root, 'probe.mjs')
+    const patchPath = join(root, 'canary.patch.yml')
+    await writeFile(probePath, HARNESS_PROBE_SOURCE, { encoding: 'utf8', mode: 0o600 })
+    await writeFile(patchPath, stringifyYaml([
+      { insert: [{ id: probeId, name: probePath, config: { nonce, resultPath, probeId } }] },
+    ]), { encoding: 'utf8', mode: 0o600 })
+    return { root, resultPath, patchPath, cwd, nonce, probeId }
+  } catch (error) {
+    try {
+      await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+    } catch (cleanupError) {
+      if (error instanceof CanarySetupError && error.code === 'canary-shutdown-failed') throw error
+      throw new CanarySetupError('canary-cleanup-failed', `Canary preparation failed and its temporary profile could not be removed: ${errorMessage(cleanupError)}`)
+    }
+    throw error
+  }
+}
+
+function parseHarnessProbeDocument(
+  text: string,
+  nonce: string,
+  pid: number | undefined,
+): HarnessProbeDocument | null {
+  try {
+    const value: unknown = JSON.parse(text)
+    if (!isRecord(value) || value.protocolVersion !== 1 || value.nonce !== nonce || value.pid !== pid
+      || !Array.isArray(value.entries) || !Array.isArray(value.clientGraphEntries)
+      || !(typeof value.port === 'number' || value.port === null)
+      || !(value.error === undefined || typeof value.error === 'string')) return null
+    if (value.entries.some((entry): boolean => !isRecord(entry)
+      || typeof entry.id !== 'string' || typeof entry.name !== 'string'
+      || typeof entry.disabled !== 'boolean'
+      || !(typeof entry.state === 'number' || entry.state === null)
+      || !Array.isArray(entry.missingServices) || entry.missingServices.some(service => typeof service !== 'string'))) return null
+    if (value.clientGraphEntries.some((entry): boolean => !isRecord(entry)
+      || typeof entry.id !== 'string' || !(typeof entry.url === 'string' || entry.url === null))) return null
+    if (value.port !== null && (!Number.isSafeInteger(value.port) || value.port <= 0 || value.port > 65_535)) return null
+    return value as unknown as HarnessProbeDocument
+  } catch {
+    return null
+  }
+}
+
+function harnessCompositionFailure(
+  document: HarnessProbeDocument,
+  expectedEntries: readonly { readonly id: string; readonly name: string; readonly disabled: boolean | 'unknown' }[],
+): string | null {
+  const key = (id: string, name: string): string => `${id}\0${name}`
+  const probeCounts = new Map<string, number>()
+  for (const entry of document.entries) {
+    const entryKey = key(entry.id, entry.name)
+    probeCounts.set(entryKey, (probeCounts.get(entryKey) ?? 0) + 1)
+  }
+  for (const expected of expectedEntries) {
+    const entryKey = key(expected.id, expected.name)
+    const count = probeCounts.get(entryKey) ?? 0
+    if (count === 0) return `Loader entry ${expected.id} (${expected.name}) is missing after the Harness update.`
+    if (count > 1) return `Loader entry ${expected.id} (${expected.name}) is duplicated after the Harness update.`
+    probeCounts.delete(entryKey)
+    const entry = document.entries.find(candidate => candidate.id === expected.id && candidate.name === expected.name) as HarnessProbeEntry
+    if (expected.disabled !== 'unknown' && entry.disabled !== expected.disabled) {
+      return `Loader entry ${expected.id} (${expected.name}) changed activation state (disabled=${String(entry.disabled)}).`
+    }
+    if (expected.disabled !== true) {
+      if (entry.state !== FIBER_ACTIVE) return `Loader entry ${expected.id} (${expected.name}) is not active (state=${String(entry.state)}).`
+      if (entry.missingServices.length > 0) return `Loader entry ${expected.id} (${expected.name}) is missing services: ${entry.missingServices.join(', ')}`
+    }
+  }
+  if (probeCounts.size > 0) {
+    // The boot adds runtime-only entries (patch `include`, HMR instances,
+    // directory-picker variants) with per-boot generated ids that never
+    // appear in the static `--dump-config`. They are environment noise, not
+    // composition drift — but a FAILED runtime-only entry still blocks.
+    const failed = document.entries.find(entry => probeCounts.has(key(entry.id, entry.name)) && entry.state === 3)
+    if (failed !== undefined) {
+      return `Runtime-only Loader entry ${failed.id} (${failed.name}) failed to activate after the Harness update.`
+    }
+  }
+  return null
+}
+
+const FIBER_ACTIVE = 2
+
+interface HarnessHttpProbeResult {
+  readonly ok: boolean
+  readonly detail: string | null
+}
+
+async function checkHarnessHttp(
+  port: number | null,
+  expectedClientPackages: readonly string[],
+  graphEntries: readonly { readonly id: string; readonly url: string | null }[],
+): Promise<HarnessHttpProbeResult> {
+  if (port === null || !Number.isSafeInteger(port) || port <= 0) {
+    return { ok: false, detail: 'The isolated Web server did not report a valid port.' }
+  }
+  try {
+    const rootResponse = await fetch(`http://127.0.0.1:${String(port)}/`, {
+      headers: { host: `127.0.0.1:${String(port)}` },
+      signal: AbortSignal.timeout(3_000),
+    })
+    await rootResponse.body?.cancel()
+    if (!rootResponse.ok) {
+      return { ok: false, detail: `Web root returned HTTP ${String(rootResponse.status)}.` }
+    }
+    const graphIds = graphEntries.map(entry => entry.id)
+    for (const packageName of expectedClientPackages) {
+      const matches = graphEntries.filter(entry => entry.id === packageName && entry.url !== null)
+      if (matches.length === 0) {
+        return { ok: false, detail: `Client package ${packageName} is missing from the Web module graph after the Harness update.` }
+      }
+      if (matches.length > 1) {
+        return { ok: false, detail: `Client package ${packageName} has multiple Web module graph rows after the Harness update.` }
+      }
+      const url = matches[0]?.url as string
+      if (!url.startsWith('/plugins/') || !url.includes('/client.js')) {
+        return { ok: false, detail: `Client package ${packageName} serves an unexpected bundle URL (${url}).` }
+      }
+      const bundleResponse = await fetch(`http://127.0.0.1:${String(port)}${url}`, {
+        headers: { host: `127.0.0.1:${String(port)}` },
+        signal: AbortSignal.timeout(3_000),
+      })
+      if (!bundleResponse.ok) {
+        await bundleResponse.body?.cancel()
+        return { ok: false, detail: `Client bundle ${packageName} returned HTTP ${String(bundleResponse.status)}.` }
+      }
+      const source = await readResponseTextBounded(bundleResponse, CLIENT_SCRIPT_MAX_BYTES)
+      const validated = validateClientBundle(source, packageName, graphIds)
+      if (!validated.ok) return { ok: false, detail: validated.detail }
+    }
+    return { ok: true, detail: null }
+  } catch {
+    return { ok: false, detail: 'The Web root or a client bundle could not be fetched.' }
+  }
+}
+
+export async function runHarnessUpdateCanary(request: HarnessCanaryRequest): Promise<HarnessCanaryResult> {
+  if (request.expectedEntries.length === 0) {
+    return { status: 'failed', code: 'harness-canary-composition-failed', detail: 'The profile composition has no Loader entries to verify.' }
+  }
+  let prepared: Awaited<ReturnType<typeof prepareHarnessCanaryHome>>
+  try {
+    prepared = await prepareHarnessCanaryHome(request.profileDir, request.profileName)
+  } catch (error) {
+    return {
+      status: 'failed',
+      code: 'harness-canary-preparation-failed',
+      detail: errorMessage(error),
+    }
+  }
+
+  let running: ReturnType<typeof startProcess> | null = null
+  let outcome: HarnessCanaryResult = { status: 'failed', code: 'harness-canary-start-failed', detail: null }
+  try {
+    try {
+      running = startProcess(request.dshBin, request.profileName, prepared, prepared.nonce)
+    } catch (error) {
+      outcome = { status: 'failed', code: 'harness-canary-start-failed', detail: errorMessage(error) }
+    }
+
+    if (running !== null) {
+      const deadline = Date.now() + request.timeoutMs
+      let document: HarnessProbeDocument | null = null
+      while (Date.now() < deadline && outcome.code === 'harness-canary-start-failed' && outcome.detail === null) {
+        try {
+          document = parseHarnessProbeDocument(await readFile(prepared.resultPath, 'utf8'), prepared.nonce, running.child.pid)
+          if (document !== null) break
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+            outcome = { status: 'failed', code: 'harness-canary-composition-failed', detail: errorMessage(error) }
+            break
+          }
+        }
+        const exit = await Promise.race([running.exited, delay(POLL_MS).then(() => null)])
+        if (exit !== null) {
+          const startError = running.startError()
+          outcome = {
+            status: 'failed',
+            code: startError === null ? 'harness-canary-process-exited' : 'harness-canary-start-failed',
+            detail: startError ?? running.output() ?? `Canary exited with code ${String(exit.code)} (${String(exit.signal)}).`,
+          }
+          break
+        }
+      }
+
+      if (document === null && outcome.code === 'harness-canary-start-failed' && outcome.detail === null) {
+        outcome = { status: 'failed', code: 'harness-canary-timeout', detail: running.output() ?? 'The isolated DSH startup did not settle before the deadline.' }
+      } else if (document !== null) {
+        if (document.error !== undefined) {
+          outcome = { status: 'failed', code: 'harness-canary-composition-failed', detail: document.error }
+        } else {
+          const composition = harnessCompositionFailure(document, request.expectedEntries)
+          if (composition !== null) {
+            outcome = { status: 'failed', code: 'harness-canary-composition-failed', detail: composition }
+          } else {
+            await delay(request.stabilityMs ?? DEFAULT_STARTUP_STABILITY_MS)
+            if (running.child.exitCode !== null || running.child.signalCode !== null) {
+              outcome = { status: 'failed', code: 'harness-canary-process-exited', detail: running.output() }
+            } else {
+              const http = await checkHarnessHttp(document.port, request.expectedClientPackages, document.clientGraphEntries)
+              outcome = http.ok
+                ? { status: 'passed', code: 'harness-canary-passed', detail: null }
+                : { status: 'failed', code: 'harness-canary-http-failed', detail: http.detail }
+            }
+          }
+        }
+      }
+    }
+  } finally {
+    let shutdown = true
+    if (running !== null) shutdown = await terminateProcessTree(running.child, running.exited)
+    let cleanup = true
+    try {
+      await rm(prepared.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+    } catch {
+      cleanup = false
+    }
+    if (!shutdown) {
+      outcome = { status: 'failed', code: 'harness-canary-shutdown-failed', detail: 'The isolated DSH process could not be terminated cleanly.' }
+    } else if (!cleanup) {
+      outcome = { status: 'failed', code: 'harness-canary-cleanup-failed', detail: 'The isolated DSH process stopped, but its temporary profile could not be removed.' }
     }
   }
   return outcome

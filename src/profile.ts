@@ -401,7 +401,7 @@ async function writableIfPresent(path: string): Promise<boolean> {
   return writable(path)
 }
 
-async function commandAvailable(command: string): Promise<boolean> {
+export async function commandAvailable(command: string): Promise<boolean> {
   const child = spawn(command, ['--version'], {
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'ignore', 'ignore'],

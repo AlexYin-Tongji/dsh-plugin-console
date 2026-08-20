@@ -1,5 +1,6 @@
-import { C as VerificationState, S as UiLocale, _ as OperationPlanRequest, a as BootstrapResponse, b as RuntimeEntrySummary, c as CatalogPluginDetail, d as InstalledPluginDetail, f as InstalledPluginSummary, g as OperationPlan, h as OperationAction, i as ArtifactManifestSummary, l as CatalogPluginSummary, m as ManagerCapabilities, n as ApiSuccess, o as CatalogListRequest, p as InstalledState, r as ArtifactKind, s as CatalogListResponse, t as ApiFailure, u as CatalogStatus, v as OperationResult, x as RuntimePhase, y as OperationWarning } from "./types-DVDxrbK6.js";
+import { C as OperationWarning, D as VerificationState, E as UiLocale, S as OperationResult, T as RuntimePhase, _ as InstalledState, a as BootstrapResponse, b as OperationPlan, c as CatalogPluginDetail, d as HarnessStatus, f as HarnessUpdatePlan, g as InstalledPluginSummary, h as InstalledPluginDetail, i as ArtifactManifestSummary, l as CatalogPluginSummary, m as HarnessUpdateWarning, n as ApiSuccess, o as CatalogListRequest, p as HarnessUpdateResult, r as ArtifactKind, s as CatalogListResponse, t as ApiFailure, u as CatalogStatus, v as ManagerCapabilities, w as RuntimeEntrySummary, x as OperationPlanRequest, y as OperationAction } from "./types-C7XbgQIp.js";
 import z from "@deepseek-ai/schemastery";
+import "yaml";
 import { ProfileManifest } from "@deepseek-ai/dsh-app-boot";
 import { Context } from "@deepseek-ai/cordis";
 
@@ -130,6 +131,25 @@ interface ActivationCanaryResult {
   readonly detail: string | null;
 }
 declare function runActivationCanary(request: ActivationCanaryRequest): Promise<ActivationCanaryResult>;
+interface HarnessCanaryRequest {
+  readonly profileDir: string;
+  readonly profileName: string;
+  readonly dshBin: string;
+  readonly expectedEntries: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly disabled: boolean | 'unknown';
+  }[];
+  readonly expectedClientPackages: readonly string[];
+  readonly stabilityMs?: number;
+  readonly timeoutMs: number;
+}
+interface HarnessCanaryResult {
+  readonly status: 'passed' | 'failed';
+  readonly code: 'harness-canary-passed' | 'harness-canary-preparation-failed' | 'harness-canary-start-failed' | 'harness-canary-process-exited' | 'harness-canary-timeout' | 'harness-canary-composition-failed' | 'harness-canary-http-failed' | 'harness-canary-client-failed' | 'harness-canary-shutdown-failed' | 'harness-canary-cleanup-failed';
+  readonly detail: string | null;
+}
+declare function runHarnessUpdateCanary(request: HarnessCanaryRequest): Promise<HarnessCanaryResult>;
 //#endregion
 //#region src/operations.d.ts
 interface CommandResult {
@@ -181,6 +201,100 @@ declare class ProfileOperations {
   close(): Promise<void>;
 }
 //#endregion
+//#region src/harness.d.ts
+interface HarnessInstallation {
+  readonly status: 'managed' | 'unmanaged' | 'unresolved';
+  readonly installRoot: string | null;
+  readonly prefix: string | null;
+  readonly executablePath: string | null;
+  readonly version: string | null;
+  readonly message: string | null;
+}
+interface HarnessManagerOptions {
+  readonly dshBin: string;
+  readonly fetchImpl?: typeof fetch;
+  readonly now?: () => number;
+}
+/**
+ * Harness-side registry lookup: the Harness is a first-party npm package, so
+ * dist-tag metadata (bounded, cached) is the update source of truth.
+ */
+declare class HarnessManager {
+  private readonly dshBin;
+  private readonly fetchImpl;
+  private readonly now;
+  private readonly distTagsCache;
+  private static readonly CACHE_KEY;
+  constructor(options: HarnessManagerOptions);
+  /** Resolve the installation the configured dsh binary belongs to. */
+  resolve(): Promise<HarnessInstallation>;
+  /**
+   * All npm dist-tags of the Harness package. The newest valid semver across
+   * every channel is the update candidate — the registry keeps `latest` one
+   * release behind `next` during the rc series, and the updater must follow
+   * the highest available version instead of a single channel.
+   */
+  private distTags;
+  /** Read the package version currently installed at a package root. */
+  installedVersionAt(installRoot: string): Promise<string | null>;
+  /**
+   * Restart-aware status. `currentVersion` is captured by the caller at
+   * startup (the Host keeps running the code it booted with), while
+   * `installedVersion` is re-read from disk on every call. `refresh` drops
+   * the cached dist-tags document so "check again" observes new releases
+   * immediately.
+   */
+  status(currentVersion: string | null, refresh?: boolean): Promise<HarnessStatus>;
+  close(): Promise<void>;
+}
+//#endregion
+//#region src/harness-operations.d.ts
+interface HarnessOperationOptions {
+  readonly profile: ProfileManager;
+  readonly harness: Pick<HarnessManager, 'resolve' | 'status' | 'installedVersionAt'>;
+  readonly npmBin: string;
+  readonly runningVersion: string | null;
+  readonly lockDir: string;
+  readonly timeoutMs?: number;
+  readonly canaryTimeoutMs?: number;
+  readonly runCommand?: (executable: string, args: readonly string[], cwd: string, timeoutMs: number) => Promise<CommandResult>;
+  readonly probeActivation?: (request: HarnessCanaryRequest) => Promise<HarnessCanaryResult>;
+  readonly lockProfile?: (dir: string) => Promise<() => Promise<void>>;
+  readonly commandAvailable?: (command: string) => Promise<boolean>;
+  readonly now?: () => number;
+}
+interface ComposedEntry {
+  readonly id: string;
+  readonly name: string;
+  /** Literal boolean from the dump, or 'unknown' for unevaluatable `!!js` expressions. */
+  readonly disabled: boolean | 'unknown';
+}
+declare function composedEntriesFromDump(output: string | null | undefined): readonly ComposedEntry[] | null;
+/** Owns one Harness update at a time and never exposes arbitrary package-manager args. */
+declare class HarnessOperations {
+  private readonly options;
+  private readonly plans;
+  private readonly runCommand;
+  private readonly probeActivation;
+  private readonly lockProfile;
+  private readonly available;
+  private readonly now;
+  private readonly timeoutMs;
+  private readonly canaryTimeoutMs;
+  private operation;
+  private disposed;
+  constructor(options: HarnessOperationOptions);
+  private snapshot;
+  plan(): Promise<HarnessUpdatePlan>;
+  private blockedFromStatus;
+  get busy(): boolean;
+  execute(planId: string): Promise<HarnessUpdateResult>;
+  private prepareAndRun;
+  private rollbackFrom;
+  private prunePlans;
+  close(): Promise<void>;
+}
+//#endregion
 //#region src/index.d.ts
 declare const name = "plugin-console";
 declare const inject: string[];
@@ -193,6 +307,7 @@ interface Config {
   readonly operationTimeoutMs: number;
   readonly canaryTimeoutMs: number;
   readonly dshBin: string;
+  readonly npmBin: string;
 }
 declare const Config: z<Config>;
 /** Mount the manager against only the active profile. */
@@ -204,5 +319,5 @@ declare const _default: {
   Config: z<Config>;
 };
 //#endregion
-export { ApiFailure, ApiSuccess, ArtifactKind, ArtifactManifestSummary, BootstrapResponse, CatalogListRequest, CatalogListResponse, CatalogPluginDetail, CatalogPluginSummary, CatalogStatus, Config, InstalledPluginDetail, InstalledPluginSummary, InstalledState, ManagerCapabilities, OperationAction, OperationPlan, OperationPlanRequest, OperationResult, OperationWarning, PluginCatalog, ProfileManager, ProfileOperations, RuntimeEntrySummary, RuntimePhase, UiLocale, VerificationState, apply, _default as default, inject, name, parseCatalogText, queryCatalog, runActivationCanary };
+export { ApiFailure, ApiSuccess, ArtifactKind, ArtifactManifestSummary, BootstrapResponse, CatalogListRequest, CatalogListResponse, CatalogPluginDetail, CatalogPluginSummary, CatalogStatus, Config, HarnessManager, HarnessOperations, HarnessStatus, HarnessUpdatePlan, HarnessUpdateResult, HarnessUpdateWarning, InstalledPluginDetail, InstalledPluginSummary, InstalledState, ManagerCapabilities, OperationAction, OperationPlan, OperationPlanRequest, OperationResult, OperationWarning, PluginCatalog, ProfileManager, ProfileOperations, RuntimeEntrySummary, RuntimePhase, UiLocale, VerificationState, apply, composedEntriesFromDump, _default as default, inject, name, parseCatalogText, queryCatalog, runActivationCanary, runHarnessUpdateCanary };
 //# sourceMappingURL=index.d.ts.map

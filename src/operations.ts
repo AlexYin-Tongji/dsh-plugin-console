@@ -31,7 +31,7 @@ const PLAN_TTL_MS = 5 * 60 * 1000
 const MAX_OUTPUT_CHARS = 24_000
 const MAX_STDOUT_CHARS = 5_000_000
 const PACKAGE_NAME = /^(?:[a-z0-9][a-z0-9._~-]*|@[a-z0-9][a-z0-9._~-]*\/[a-z0-9][a-z0-9._~-]*)$/i
-const JS_EXPRESSION_TAG: ScalarTag = {
+export const JS_EXPRESSION_TAG: ScalarTag = {
   tag: 'tag:yaml.org,2002:js',
   identify: (value: unknown): boolean => isRecord(value)
     && Object.keys(value).length === 1
@@ -45,7 +45,7 @@ interface StoredPlan {
   readonly fingerprint: string
 }
 
-interface CommandResult {
+export interface CommandResult {
   readonly code: number | null
   readonly unavailable: boolean
   readonly timedOut: boolean
@@ -151,7 +151,7 @@ async function snapshotResult(
   }
 }
 
-async function command(
+export async function command(
   executable: string,
   args: readonly string[],
   cwd: string,
@@ -471,7 +471,7 @@ async function lockfileHasIntegrity(profileDir: string, packageName: string, ver
   }
 }
 
-function collectComposedEntries(value: unknown, entries: Record<string, unknown>[]): void {
+export function collectComposedEntries(value: unknown, entries: Record<string, unknown>[]): void {
   if (!Array.isArray(value)) return
   for (const item of value) {
     if (!isRecord(item)) continue

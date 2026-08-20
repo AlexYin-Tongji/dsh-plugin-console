@@ -13,6 +13,8 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import z from '@deepseek-ai/schemastery'
 import { PluginCatalog } from './catalog.ts'
+import { HarnessManager } from './harness.ts'
+import { HarnessOperations } from './harness-operations.ts'
 import { ProfileManager } from './profile.ts'
 import { ProfileOperations } from './operations.ts'
 import type {
@@ -27,7 +29,9 @@ export type * from './types.ts'
 export { PluginCatalog, parseCatalogText, queryCatalog } from './catalog.ts'
 export { ProfileManager } from './profile.ts'
 export { ProfileOperations } from './operations.ts'
-export { runActivationCanary } from './canary.ts'
+export { HarnessManager } from './harness.ts'
+export { HarnessOperations, composedEntriesFromDump } from './harness-operations.ts'
+export { runActivationCanary, runHarnessUpdateCanary } from './canary.ts'
 
 export const name = 'plugin-console'
 export const inject = ['webServer', 'loader']
@@ -41,6 +45,7 @@ export interface Config {
   readonly operationTimeoutMs: number
   readonly canaryTimeoutMs: number
   readonly dshBin: string
+  readonly npmBin: string
 }
 
 export const Config: z<Config> = z.object({
@@ -52,6 +57,7 @@ export const Config: z<Config> = z.object({
   operationTimeoutMs: z.natural().min(10_000).default(300_000),
   canaryTimeoutMs: z.natural().min(5_000).default(60_000),
   dshBin: z.string().default('dsh'),
+  npmBin: z.string().default('npm'),
 })
 
 const API_PATH = '/api/plugin-console'
@@ -190,6 +196,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   }
   if (catalogUrl.protocol !== 'https:') throw new Error('dsh-plugin-console catalogUrl must use HTTPS.')
   if (config.dshBin.trim().length === 0 || config.dshBin.includes('\u0000')) throw new Error('dsh-plugin-console dshBin is invalid.')
+  if (config.npmBin.trim().length === 0 || config.npmBin.includes('\u0000')) throw new Error('dsh-plugin-console npmBin is invalid.')
   const catalog = new PluginCatalog({
     sourceUrl: catalogUrl.href,
     cachePath: dshHomePath('cache', 'plugin-console', 'catalog.json'),
@@ -210,6 +217,18 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     profile: manager,
     catalog,
     dshBin: config.dshBin,
+    timeoutMs: config.operationTimeoutMs,
+    canaryTimeoutMs: config.canaryTimeoutMs,
+  })
+  const harness = new HarnessManager({ dshBin: config.dshBin })
+  const harnessInstallation = await harness.resolve()
+  const runningVersion = harnessInstallation.version
+  const harnessOperations = new HarnessOperations({
+    profile: manager,
+    harness,
+    npmBin: config.npmBin,
+    runningVersion,
+    lockDir: dshHomePath(),
     timeoutMs: config.operationTimeoutMs,
     canaryTimeoutMs: config.canaryTimeoutMs,
   })
@@ -236,6 +255,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
               catalog: catalog.list(request),
               installed: await manager.list(locale(isRecord(params) ? params.locale : undefined)),
               capabilities: await manager.capabilities(),
+              harness: await harness.status(runningVersion),
             }
             value = response
             break
@@ -257,6 +277,17 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             break
           }
           case 'capabilities': value = await manager.capabilities(); break
+          case 'harness/status':
+            value = await harness.status(runningVersion, isRecord(params) && params.refresh === true)
+            break
+          case 'harness/plan':
+            verifyLoopback(req)
+            value = await harnessOperations.plan()
+            break
+          case 'harness/execute':
+            verifyLoopback(req)
+            value = await harnessOperations.execute(executeRequest(params))
+            break
           case 'plan':
             verifyLoopback(req)
             value = await operations.plan(planRequest(params))
@@ -279,6 +310,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   })
   ctx.effect(() => disposeRoute, 'plugin-console.api')
   ctx.effect(() => async () => {
+    await harnessOperations.close()
+    await harness.close()
     await operations.close()
     await manager.close()
     await catalog.close()

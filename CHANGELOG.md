@@ -2,6 +2,21 @@
 
 All notable changes to DSH Plugin Console are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-08-20
+
+### Added
+
+- Sidebar Harness-update entry (`sidebar.footer.action`): the icon shows the running Harness version, badges a pending update, and opens a panel with running/installed/latest versions, the update channel, and a reviewed one-click update flow with confirmation, execution progress, and restart notice.
+- Harness self-update operations for npm-global installations: the running `dsh` executable is resolved to its package root and npm prefix (POSIX `lib/node_modules` and Windows `node_modules` layouts), the target version is the highest valid SemVer across ALL npm dist-tags (`latest`, `next`, …) with the carrying channel reported, and updates run through `npm install --global --prefix` with exact old/new version verification and automatic reinstall of the previous version on any failure.
+- Full-profile Harness canary: after an update is written, the complete composed profile (every installed plugin's Loader entry, activation state, client module graph, and HTTP surface) boots in an isolated home under the NEW Harness binary before the update is accepted; the expected composition is snapshotted from `--dump-config` (with local evaluation of `!!js` expressions) before mutation, runtime-only boot entries are tolerated, and any missing/disabled/failed entry, client-bundle failure, or crashed plugin rolls the Harness back and re-verifies the old state.
+- Harness status API (`harness/status` with forced refresh), reviewed plan and execution API (`harness/plan`, `harness/execute`), bootstrap projection, restart-aware pending state, and a dedicated cross-process update lock under `$DSH_HOME`.
+- New configuration: `npmBin` (env `DSH_PLUGIN_CONSOLE_NPM_BIN`).
+
+### Changed
+
+- Non-npm-managed Harness installations (pnpm-store layouts, manual installs, unresolvable binaries) are reported with an explanation and never offer the update button.
+- The Harness update shares the profile busy gate with plugin operations, so plugin and Harness mutations can never interleave.
+
 ## [0.2.2] - 2026-08-20
 
 ### Added

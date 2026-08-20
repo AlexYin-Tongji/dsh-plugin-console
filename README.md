@@ -18,6 +18,7 @@
 - **隔离试运行**：安装或更新后，在临时 `DSH_HOME`、随机本地端口和隔离 HOME/TMP 中启动完整 Web profile；已安装的其他第三方 bundle 也会一起启动，因此插件间、插件与 DSH/Cordis 的初始化冲突会在新版本写入前被发现。目标 bundle 的 Loader 条目、精确包版本、客户端 bundle 的语法／执行／唯一包名注册／模块依赖和 HTTP 资源全部通过后才保留新版，否则自动恢复旧版本。浏览器内 UI 交互仍由用户在重启刷新后人工确认。
 - **变更确认**：所有写操作先生成 5 分钟有效的 plan；执行前重新校验 profile 指纹、当前包状态和 artifact integrity，同一时间只允许一个变更。元数据实际变化后才按恢复后的 lockfile 做 frozen reinstall，不会先删除整个 `node_modules`；供应链策略在命令开始前拒绝时不会破坏现有依赖。
 - **重启提示**：变更由 pnpm/profile manifest 持久化，当前 Loader 不会被伪装成已更新，页面会明确显示隔离试运行结果和重启后生效状态。
+- **DSH 一键更新**：左侧边栏底部新增 Harness 更新入口，图标常显当前版本，有更新时显示待更新版本角标；点开面板可查看运行中/已安装/最新版本与更新通道（`latest`/`next` 全部通道取最高版本，如 rc 系列中 `latest` 落后于 `next` 时会直接显示 `next` 的更新），并可强制「重新检查」绕过缓存、一键更新 DeepSeek Harness 本体。更新只支持 npm 全局安装（自动解析运行中 dsh 可执行文件所属的 npm prefix）；执行时先精确校验新旧版本，再用新 Harness 在隔离副本中启动**完整 profile**——所有已安装插件的 Loader 条目、激活状态、client bundle 图与 HTTP 表面全部通过才接受，任何插件初始化失败都会自动重装旧版 Harness 并再次隔离验证；更新成功后运行中的 Host 保持旧版本，重启 DSH 后生效。
 
 ## 安装
 
@@ -54,14 +55,18 @@ bundle 默认配置位于 `cordis.patch.yml`。可在 profile 的 `cordis.patch.
     operationTimeoutMs: 300000
     canaryTimeoutMs: 60000
     dshBin: dsh
+    npmBin: npm
 ```
 
 也支持环境变量：
 
 - `DSH_PLUGIN_CONSOLE_CATALOG_URL`
 - `DSH_PLUGIN_CONSOLE_DSH_BIN`
+- `DSH_PLUGIN_CONSOLE_NPM_BIN`
 
-目录缓存写入 `$DSH_HOME/cache/plugin-console/catalog.json`。上游不可用时保留最后一次有效目录，不会用空响应覆盖缓存。`catalogUrl` 必须是绝对 HTTPS URL。`dshBin` / `DSH_PLUGIN_CONSOLE_DSH_BIN` 是管理员级配置，会被作为本机可执行文件启动，不应接受不可信输入。
+目录缓存写入 `$DSH_HOME/cache/plugin-console/catalog.json`。上游不可用时保留最后一次有效目录，不会用空响应覆盖缓存。`catalogUrl` 必须是绝对 HTTPS URL。`dshBin` / `DSH_PLUGIN_CONSOLE_DSH_BIN` 与 `npmBin` / `DSH_PLUGIN_CONSOLE_NPM_BIN` 是管理员级配置，会被作为本机可执行文件启动，不应接受不可信输入。
+
+Harness 更新版本来自 `@deepseek-ai/dsh` 的**全部 npm dist-tag**（`latest`/`next` 等），面板显示版本所在的通道，并总是取各通道中的最高合法 SemVer；「重新检查」会绕过 5 分钟缓存强制重新拉取 dist-tags。
 
 ## 安全边界
 
@@ -77,6 +82,8 @@ DSH 插件是 Host 进程中的受信任代码，不是隔离的浏览器扩展�
 8. API 仅接受同源 POST；变更请求还必须来自 loopback。profile 路径从 Loader `baseUrl` 推导并限制在 `$DSH_HOME/profiles` 下。
 9. README 使用独立的不可信内容 renderer；raw HTML 只允许安全标签和协议，事件属性、脚本、iframe、危险 URL 会被清理，非 Markdown 和源码模式只展示纯文本。
 10. 删除只改变 package-manager/profile 状态，不清理未知的插件数据目录；清理 Bundle 配置或组合失败会恢复删除前的 profile。
+11. Harness 更新只作用于解析出的 npm 全局安装（POSIX `<prefix>/lib/node_modules` 或 Windows `<prefix>/node_modules` 布局，且 prefix 的 bin 面存在）；其他安装方式只展示状态，不提供更新按钮。更新目标固定为 `@deepseek-ai/dsh` 的精确 npm 版本，命令参数数组固定、`shell: false`。
+12. Harness 更新在写入前用 `--dump-config` 快照完整组合（含 `!!js` 表达式的本地求值），写入后校验精确版本与 CLI 输出，再以新二进制运行全 profile 隔离 canary；失败自动重装旧版并再次验证。更新的是 Harness 本体，属于执行新一版受信任代码，确认页明确警告。
 
 “已验证”只表示 manifest 和 artifact 结构符合 DSH 安装约定，不表示作者或代码经过安全背书。
 
@@ -105,11 +112,15 @@ node node_modules/tsdown/dist/run.mjs -c tsdown.config.ts
 src/catalog.ts                         社区 feed、缓存、npm/GitHub 验证
 src/profile.ts                         profile manifest、包清单、Loader 运行态
 src/operations.ts                      plan、串行 dsh CLI 变更、失败恢复
+src/harness.ts                         DSH 安装解析（npm global prefix）与更新状态
+src/harness-operations.ts              Harness 更新 plan/execute、版本校验、回滚
+src/canary.ts                          插件隔离 canary + 全 profile Harness canary
 src/index.ts                           Host API /api/plugin-console
-src/client/index.ts                    Web Settings slot 注册
+src/client/index.ts                    Web Settings slot + 侧边栏入口注册
 src/client/PluginManageSettingsTab.tsx 商店、已安装、详情和确认 UI
+src/client/HarnessUpdateAction.tsx     侧边栏 DSH 更新入口与确认面板
 src/client/*.module.css                主题变量和响应式布局
-tests/                                 目录、profile、事务、client runtime 与构建契约测试
+tests/                                 目录、profile、事务、canary、Harness 更新与构建契约测试
 ```
 
 贡献、安全与发布说明：

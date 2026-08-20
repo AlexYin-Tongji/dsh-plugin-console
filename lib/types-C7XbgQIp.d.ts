@@ -115,6 +115,64 @@ interface BootstrapResponse {
   readonly catalog: CatalogListResponse;
   readonly installed: readonly InstalledPluginSummary[];
   readonly capabilities: ManagerCapabilities;
+  readonly harness: HarnessStatus;
+}
+/** Read-only projection of the DeepSeek Harness installation itself. */
+interface HarnessStatus {
+  /** Version of the Harness that loaded this Host process, captured at startup. */
+  readonly currentVersion: string | null;
+  /** Version currently installed at the resolved package root. */
+  readonly installedVersion: string | null;
+  /** Highest version offered across the npm dist-tags. */
+  readonly latestVersion: string | null;
+  /** The dist-tag channel that carries `latestVersion`. */
+  readonly updateTag: string | null;
+  /** Every known dist-tag channel of the Harness package. */
+  readonly channels: readonly {
+    readonly tag: string;
+    readonly version: string;
+  }[];
+  /** True when the installed package is managed by npm global and an upgrade exists. */
+  readonly updateAvailable: boolean;
+  /** True when the installed version differs from the running one (update applied, restart pending). */
+  readonly pendingRestart: boolean;
+  /** Whether the running installation is an npm-global install that can be updated in place. */
+  readonly managed: boolean;
+  readonly packageName: string;
+  readonly installRoot: string | null;
+  readonly prefix: string | null;
+  readonly executablePath: string | null;
+  readonly installMessage: string | null;
+  readonly updateCheckError: string | null;
+}
+type HarnessUpdateWarning = 'trusted-code' | 'restart-required' | 'canary-validation';
+interface HarnessUpdatePlan {
+  readonly status: 'ready' | 'blocked';
+  readonly planId: string | null;
+  readonly blockReason: string | null;
+  readonly currentVersion: string | null;
+  readonly targetVersion: string | null;
+  readonly updateTag: string | null;
+  readonly installRoot: string | null;
+  readonly prefix: string | null;
+  readonly updateCommand: string | null;
+  readonly warnings: readonly HarnessUpdateWarning[];
+  readonly expiresAt: string | null;
+}
+interface HarnessUpdateResult {
+  readonly status: 'succeeded' | 'failed';
+  readonly code: string;
+  readonly currentVersion: string | null;
+  readonly targetVersion: string | null;
+  readonly restartRequired: boolean;
+  readonly activation: 'unchanged' | 'pending-restart' | 'unknown';
+  readonly canary: 'not-run' | 'passed' | 'failed';
+  readonly processCleanup: 'not-needed' | 'succeeded' | 'failed';
+  readonly rollback: 'not-needed' | 'succeeded' | 'failed';
+  readonly detail: string | null;
+  readonly harness: HarnessStatus;
+  readonly installed: readonly InstalledPluginSummary[];
+  readonly capabilities: ManagerCapabilities;
 }
 type OperationAction = 'install' | 'update' | 'remove' | 'pause' | 'resume';
 type OperationWarning = 'trusted-code' | 'restart-required' | 'scripts-disabled' | 'canary-validation' | 'compatibility-unknown' | 'remove-data-kept' | 'self-removal' | 'uncatalogued-update';
@@ -166,5 +224,5 @@ interface ApiFailure {
   };
 }
 //#endregion
-export { VerificationState as C, UiLocale as S, OperationPlanRequest as _, BootstrapResponse as a, RuntimeEntrySummary as b, CatalogPluginDetail as c, InstalledPluginDetail as d, InstalledPluginSummary as f, OperationPlan as g, OperationAction as h, ArtifactManifestSummary as i, CatalogPluginSummary as l, ManagerCapabilities as m, ApiSuccess as n, CatalogListRequest as o, InstalledState as p, ArtifactKind as r, CatalogListResponse as s, ApiFailure as t, CatalogStatus as u, OperationResult as v, RuntimePhase as x, OperationWarning as y };
-//# sourceMappingURL=types-DVDxrbK6.d.ts.map
+export { OperationWarning as C, VerificationState as D, UiLocale as E, OperationResult as S, RuntimePhase as T, InstalledState as _, BootstrapResponse as a, OperationPlan as b, CatalogPluginDetail as c, HarnessStatus as d, HarnessUpdatePlan as f, InstalledPluginSummary as g, InstalledPluginDetail as h, ArtifactManifestSummary as i, CatalogPluginSummary as l, HarnessUpdateWarning as m, ApiSuccess as n, CatalogListRequest as o, HarnessUpdateResult as p, ArtifactKind as r, CatalogListResponse as s, ApiFailure as t, CatalogStatus as u, ManagerCapabilities as v, RuntimeEntrySummary as w, OperationPlanRequest as x, OperationAction as y };
+//# sourceMappingURL=types-C7XbgQIp.d.ts.map

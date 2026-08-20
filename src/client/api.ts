@@ -3,6 +3,9 @@ import type {
   CatalogListRequest,
   CatalogListResponse,
   CatalogPluginDetail,
+  HarnessStatus,
+  HarnessUpdatePlan,
+  HarnessUpdateResult,
   InstalledPluginDetail,
   InstalledPluginSummary,
   ManagerCapabilities,
@@ -21,6 +24,9 @@ export interface PluginManageApi {
   installed: (locale: string) => Promise<readonly InstalledPluginSummary[]>
   installedDetail: (packageName: string, locale: string) => Promise<InstalledPluginDetail | null>
   capabilities: () => Promise<ManagerCapabilities>
+  harnessStatus: (refresh?: boolean) => Promise<HarnessStatus>
+  harnessPlan: () => Promise<HarnessUpdatePlan>
+  harnessExecute: (planId: string) => Promise<HarnessUpdateResult>
   plan: (request: OperationPlanRequest) => Promise<OperationPlan>
   execute: (planId: string) => Promise<OperationResult>
 }
@@ -49,6 +55,9 @@ export function createPluginManageApi(): PluginManageApi {
     installed: locale => call('installed/list', { locale }),
     installedDetail: (packageName, locale) => call('installed/detail', { packageName, locale }),
     capabilities: () => call('capabilities'),
+    harnessStatus: refresh => call('harness/status', { refresh: refresh === true }),
+    harnessPlan: () => call('harness/plan'),
+    harnessExecute: planId => call('harness/execute', { planId }),
     plan: request => call('plan', request),
     execute: planId => call('execute', { planId }),
   }
