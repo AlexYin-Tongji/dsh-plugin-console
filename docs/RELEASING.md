@@ -18,7 +18,7 @@ pnpm install --frozen-lockfile --ignore-scripts
 pnpm run release:verify
 npm pack
 tmp="$(mktemp -d)"
-DSH_HOME="$tmp" dsh plugin --profile web add ./dsh-plugin-console-0.2.0.tgz --ignore-scripts
+DSH_HOME="$tmp" dsh plugin --profile web add ./dsh-plugin-console-0.2.1.tgz --ignore-scripts
 DSH_HOME="$tmp" dsh --profile web --dump-config
 ```
 
@@ -35,9 +35,9 @@ Then verify:
 Set `package.json.version` to the new SemVer and merge that release commit to `main`. Then create and push a signed or annotated tag with the exact same version:
 
 ```sh
-git tag -a v0.2.0 -m "dsh-plugin-console v0.2.0"
+git tag -a v0.2.1 -m "dsh-plugin-console v0.2.1"
 git push origin main
-git push origin v0.2.0
+git push origin v0.2.1
 ```
 
 The release workflow verifies the tag/version match and queries the exact `name@version` on npm. It publishes with provenance only when that version is absent; publishing a new version requires `NPM_TOKEN` in the repository's `npm` environment. Do not push the tag until that credential is configured. Re-running a tag whose npm version already exists succeeds without another publish attempt. Create the GitHub Release from the same tag and attach the packed tarball.

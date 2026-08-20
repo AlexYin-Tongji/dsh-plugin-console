@@ -117,7 +117,7 @@ interface BootstrapResponse {
   readonly capabilities: ManagerCapabilities;
 }
 type OperationAction = 'install' | 'update' | 'remove' | 'pause' | 'resume';
-type OperationWarning = 'trusted-code' | 'restart-required' | 'scripts-disabled' | 'compatibility-unknown' | 'remove-data-kept' | 'self-removal' | 'uncatalogued-update';
+type OperationWarning = 'trusted-code' | 'restart-required' | 'scripts-disabled' | 'canary-validation' | 'compatibility-unknown' | 'remove-data-kept' | 'self-removal' | 'uncatalogued-update';
 interface OperationPlanRequest {
   readonly action: OperationAction;
   readonly catalogId?: string;
@@ -132,6 +132,7 @@ interface OperationPlan {
   readonly catalogId: string | null;
   readonly packageName: string | null;
   readonly currentVersion: string | null;
+  readonly currentSpec: string | null;
   readonly targetVersion: string | null;
   readonly sourceSpec: string | null;
   readonly artifactIntegrity: string | null;
@@ -145,6 +146,9 @@ interface OperationResult {
   readonly action: OperationAction | null;
   readonly packageName: string | null;
   readonly restartRequired: boolean;
+  readonly activation: 'unchanged' | 'pending-restart' | 'unknown';
+  readonly canary: 'not-run' | 'passed' | 'failed';
+  readonly processCleanup: 'not-needed' | 'succeeded' | 'failed';
   readonly rollback: 'not-needed' | 'succeeded' | 'failed';
   readonly detail: string | null;
   readonly installed: readonly InstalledPluginSummary[];
@@ -163,4 +167,4 @@ interface ApiFailure {
 }
 //#endregion
 export { VerificationState as C, UiLocale as S, OperationPlanRequest as _, BootstrapResponse as a, RuntimeEntrySummary as b, CatalogPluginDetail as c, InstalledPluginDetail as d, InstalledPluginSummary as f, OperationPlan as g, OperationAction as h, ArtifactManifestSummary as i, CatalogPluginSummary as l, ManagerCapabilities as m, ApiSuccess as n, CatalogListRequest as o, InstalledState as p, ArtifactKind as r, CatalogListResponse as s, ApiFailure as t, CatalogStatus as u, OperationResult as v, RuntimePhase as x, OperationWarning as y };
-//# sourceMappingURL=types-CEotyhPd.d.ts.map
+//# sourceMappingURL=types-DVDxrbK6.d.ts.map

@@ -8,4 +8,5 @@
         maxCatalogBytes: 5000000
         maxReadmeBytes: 262144
         operationTimeoutMs: 300000
+        canaryTimeoutMs: 60000
         dshBin: !!js process.env.DSH_PLUGIN_CONSOLE_DSH_BIN ?? 'dsh'

@@ -2,6 +2,21 @@
 
 All notable changes to DSH Plugin Console are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-08-19
+
+### Added
+
+- Isolated activation canary for installs and updates: a temporary DSH Web profile starts on an OS-assigned local port, validates the exact package version, target Loader entries, client-bundle syntax/execution/registration/module dependencies and HTTP resources, and terminates before the real profile is accepted; browser UI interaction remains a manual post-restart check.
+
+### Changed
+
+- Failed canaries automatically restore the previous profile metadata and dependency graph without deleting the entire `node_modules` directory first.
+- Operation results and confirmation UI report whether the isolated canary passed or failed.
+- The canary now evaluates the complete composed profile, so initialization conflicts with existing third-party bundles are treated as update failures; uncertain recovery retains the original dependency snapshot for inspection.
+- Profile locks reclaim stale directories atomically, and metadata recovery uses atomic writes.
+- Removal now verifies that the package is gone from both profile dependencies and `dsh.profile.bundles`, repairing stale bundle entries left by older or replaced DSH launchers; any repair or composition failure restores the previous profile state.
+- Removal success now explains that the running Host and browser still hold their startup module graph and must be restarted/refreshed; update discovery remains read-only and every install/update requires the visible review and confirmation controls.
+
 ## [0.2.0] - 2026-08-19
 
 ### Added

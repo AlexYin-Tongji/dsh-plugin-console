@@ -117,11 +117,25 @@ function reasonLabel(reason: string | null, t: Translate): string {
     case 'already-active': return t('reasonAlreadyActive')
     case 'plugin-entry-unavailable': return t('reasonEntryUnavailable')
     case 'self-pause-protected': return t('reasonSelfPause')
+    case 'canary-preparation-failed': return t('reasonCanaryPreparation')
+    case 'canary-start-failed': return t('reasonCanaryStart')
+    case 'canary-process-exited': return t('reasonCanaryExited')
+    case 'canary-timeout': return t('reasonCanaryTimeout')
+    case 'canary-target-failed': return t('reasonCanaryTarget')
+    case 'canary-http-failed': return t('reasonCanaryHttp')
+    case 'canary-shutdown-failed': return t('reasonCanaryShutdown')
+    case 'canary-cleanup-failed': return t('reasonCanaryCleanup')
+    case 'operation-process-leaked': return t('reasonProcessLeaked')
+    case 'profile-locked': return t('reasonProfileLocked')
+    case 'profile-lock-failed': return t('reasonProfileLockFailed')
     case 'restart-required-before-next-change': return t('reasonRestart')
     case 'profile-changed': return t('reasonChanged')
+    case 'profile-changed-during-canary': return t('reasonChanged')
+    case 'profile-changed-during-removal': return t('reasonChanged')
     case 'artifact-repository-mismatch': return t('reasonRepository')
     case 'installed-version-invalid': return t('reasonVersion')
     case 'plan-state-changed': return t('reasonState')
+    case 'profile-manifest-repair-failed': return t('reasonManifestRepair')
     case 'composition-validation-failed': return t('reasonState')
     case 'activation-validation-failed': return t('reasonState')
     default: return reason ?? t('reasonGeneric')
@@ -133,6 +147,7 @@ function warningText(warning: OperationPlan['warnings'][number], t: Translate): 
     case 'trusted-code': return t('warningTrusted')
     case 'restart-required': return t('warningRestart')
     case 'scripts-disabled': return t('warningScripts')
+    case 'canary-validation': return t('warningCanary')
     case 'compatibility-unknown': return t('warningCompat')
     case 'remove-data-kept': return t('warningData')
     case 'self-removal': return t('warningSelf')
@@ -598,10 +613,16 @@ export function PluginManageSettingsTab({ api, locale, t }: PluginManageSettings
       setCapabilities(result.capabilities)
       setReview(null)
       if (result.status === 'succeeded') {
-        setBanner(t('restartBanner'))
+        setBanner(t(result.canary === 'passed'
+          ? 'canaryPassedBanner'
+          : result.action === 'remove'
+            ? 'removeRestartBanner'
+            : 'restartBanner'))
         setSelection(null)
       } else {
-        setOperationError(interpolate(t('operationFailed', { message: '' }), { message: result.detail ?? reasonLabel(result.code, t) }))
+        const reason = result.detail ?? reasonLabel(result.code, t)
+        const message = result.rollback === 'failed' ? `${reason} ${t('rollbackFailed')}` : reason
+        setOperationError(interpolate(t('operationFailed', { message: '' }), { message }))
       }
     }).catch((error: unknown) => {
       if (!alive.current || sequence !== operationSequence.current) return

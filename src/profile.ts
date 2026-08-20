@@ -75,6 +75,17 @@ export interface PluginActivationTarget {
   readonly name: string
 }
 
+export interface PluginConfigurationTarget {
+  readonly id: string
+  readonly name: string | null
+}
+
+export interface PluginActivationDescriptor {
+  readonly targets: readonly PluginActivationTarget[]
+  readonly configurationTargets: readonly PluginConfigurationTarget[]
+  readonly configurationOnly: boolean
+}
+
 export interface ProfileManagerOptions {
   readonly ctx: Context
   readonly profileDir?: string
@@ -315,17 +326,35 @@ function collectBundleEntries(sequence: YAMLSeq, targets: Map<string, PluginActi
   }
 }
 
-async function readBundleActivationTargets(root: string, dsh: Record<string, unknown> | null): Promise<readonly PluginActivationTarget[]> {
+async function readBundleActivationDescriptor(root: string, dsh: Record<string, unknown> | null): Promise<PluginActivationDescriptor> {
   const relative = bundlePatchPath(dsh)
-  if (relative === null) return []
+  if (relative === null) throw new Error('The package does not declare a valid DSH bundle patch.')
   const { sequence } = parseProfilePatchDocument(await readTextBounded(join(root, relative), MAX_PROFILE_PATCH_BYTES))
   const targets = new Map<string, PluginActivationTarget>()
+  const configurationTargets = new Map<string, PluginConfigurationTarget>()
   for (const patch of sequence.items) {
-    if (!isMap(patch)) continue
+    if (!isMap(patch)) throw new Error('The bundle patch contains a non-mapping entry.')
     const insert = patch.get('insert')
-    if (isSeq(insert)) collectBundleEntries(insert, targets)
+    if (isSeq(insert)) {
+      collectBundleEntries(insert, targets)
+    } else if (insert === undefined && typeof patch.get('id') === 'string') {
+      const id = patch.get('id') as string
+      const name = typeof patch.get('name') === 'string' ? patch.get('name') as string : null
+      configurationTargets.set(`${id}\0${name ?? ''}`, { id, name })
+    }
   }
-  return [...targets.values()]
+  if (targets.size === 0 && configurationTargets.size === 0) {
+    throw new Error('The bundle patch declares neither Loader entries nor explicit configuration overrides.')
+  }
+  return {
+    targets: [...targets.values()],
+    configurationTargets: [...configurationTargets.values()],
+    configurationOnly: targets.size === 0 && configurationTargets.size > 0,
+  }
+}
+
+async function readBundleActivationTargets(root: string, dsh: Record<string, unknown> | null): Promise<readonly PluginActivationTarget[]> {
+  return (await readBundleActivationDescriptor(root, dsh)).targets
 }
 
 async function readProfilePatchDocument(path: string): Promise<ProfilePatchDocument> {
@@ -605,10 +634,18 @@ export class ProfileManager {
     }
   }
 
-  async setPluginPaused(packageName: string, paused: boolean): Promise<readonly PluginActivationTarget[]> {
+  async activationDescriptor(packageName: string): Promise<PluginActivationDescriptor> {
     const packageData = await readPackageJson(this.runtime.dir, packageName)
-    const dsh = packageData === null ? null : packageDsh(packageData.value)
-    const declaredTargets = packageData === null ? [] : await readBundleActivationTargets(packageData.root, dsh)
+    if (packageData === null) throw new Error(`The installed package ${packageName} could not be resolved.`)
+    return readBundleActivationDescriptor(packageData.root, packageDsh(packageData.value))
+  }
+
+  async activationTargets(packageName: string): Promise<readonly PluginActivationTarget[]> {
+    return (await this.activationDescriptor(packageName)).targets
+  }
+
+  async setPluginPaused(packageName: string, paused: boolean): Promise<readonly PluginActivationTarget[]> {
+    const declaredTargets = await this.activationTargets(packageName)
     const targets = pluginRuntimeEntries(this.ctx, packageName, declaredTargets)
       .map(entry => ({ id: entry.patchId, name: entry.name }))
     const uniqueTargets = new Map<string, PluginActivationTarget>()
@@ -632,6 +669,43 @@ export class ProfileManager {
     }
     await writeFileAtomic(path, String(document))
     return [...uniqueTargets.values()]
+  }
+
+  /** Remove persisted pause overrides that target a package being uninstalled. */
+  async removePluginPauseOverrides(
+    targets: readonly PluginActivationTarget[],
+  ): Promise<void> {
+    const targetKeys = new Set(targets.map(target => activationKey(target.id, target.name)))
+    if (targetKeys.size === 0) return
+    const path = profilePatchPath(this.runtime)
+    const { document, sequence } = await readProfilePatchDocument(path)
+    let pendingComment: string | undefined
+    const remaining = []
+    for (const item of sequence.items) {
+      const remove = isMap(item) && item.get('insert') === undefined
+        && typeof item.get('id') === 'string'
+        && typeof item.get('name') === 'string'
+        && targetKeys.has(activationKey(item.get('id') as string, item.get('name') as string))
+      if (remove) {
+        if (typeof item.commentBefore === 'string') {
+          pendingComment = pendingComment === undefined
+            ? item.commentBefore
+            : `${pendingComment}\n${item.commentBefore}`
+        }
+        continue
+      }
+      if (pendingComment !== undefined && isMap(item)) {
+        item.commentBefore = typeof item.commentBefore !== 'string'
+          ? pendingComment
+          : `${pendingComment}\n${item.commentBefore}`
+        pendingComment = undefined
+      }
+      remaining.push(item)
+    }
+    if (pendingComment !== undefined && remaining.length === 0) sequence.commentBefore = pendingComment
+    if (remaining.length === sequence.items.length) return
+    sequence.items.splice(0, sequence.items.length, ...remaining)
+    await writeFileAtomic(path, String(document))
   }
 
   async currentManifest(): Promise<ProfileManifest> {

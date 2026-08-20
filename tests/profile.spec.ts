@@ -113,6 +113,36 @@ describe('profile projection', () => {
     }
   })
 
+  it('distinguishes explicit configuration-only bundles from empty patches', async () => {
+    const root = await mkdtemp(join('/tmp', 'dsh-plugin-console-config-only-'))
+    const configured = join(root, 'node_modules', 'configured-plugin')
+    const empty = join(root, 'node_modules', 'empty-plugin')
+    try {
+      await mkdir(configured, { recursive: true })
+      await mkdir(empty, { recursive: true })
+      await writeFile(join(root, 'package.json'), JSON.stringify({
+        name: 'dsh-profile-test',
+        dependencies: { 'configured-plugin': '1.0.0', 'empty-plugin': '1.0.0' },
+        dsh: { profile: { bundles: ['configured-plugin', 'empty-plugin'] } },
+      }))
+      for (const [dir, name] of [[configured, 'configured-plugin'], [empty, 'empty-plugin']] as const) {
+        await writeFile(join(dir, 'package.json'), JSON.stringify({ name, version: '1.0.0', dsh: { bundle: { patch: './cordis.patch.yml' } } }))
+      }
+      await writeFile(join(configured, 'cordis.patch.yml'), '- id: existing-entry\n  disabled: true\n')
+      await writeFile(join(empty, 'cordis.patch.yml'), '[]\n')
+      const ctx = { baseUrl: pathToFileURL(root).href, loader: { entries: () => [] } } as never
+      const manager = new ProfileManager({ ctx, dshBin: 'dsh', catalog: fakeCatalog() })
+      expect(await manager.activationDescriptor('configured-plugin')).toEqual({
+        targets: [],
+        configurationTargets: [{ id: 'existing-entry', name: null }],
+        configurationOnly: true,
+      })
+      await expect(manager.activationDescriptor('empty-plugin')).rejects.toThrow(/neither Loader entries nor explicit configuration overrides/)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('persists multi-entry pause state without stripping YAML comments or js tags', async () => {
     const root = await mkdtemp(join('/tmp', 'dsh-plugin-console-pause-'))
     const pluginRoot = join(root, 'node_modules', 'demo-plugin')
@@ -166,6 +196,32 @@ describe('profile projection', () => {
       expect(patch).toContain('# keep this user comment')
       expect(patch).toContain('disabled: false')
       expect((await manager.list('en', false))[0]?.state).toBe('active')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('removes only persisted pause overrides for the deleted plugin targets', async () => {
+    const root = await mkdtemp(join('/tmp', 'dsh-plugin-console-remove-pause-'))
+    try {
+      await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'dsh-profile-test', dependencies: {} }))
+      await writeFile(join(root, 'cordis.patch.yml'), [
+        '# preserve this profile comment',
+        '- id: demo-a',
+        '  name: demo-plugin-a',
+        '  disabled: true',
+        '- id: unrelated',
+        '  name: unrelated-plugin',
+        '  disabled: true',
+        '',
+      ].join('\n'))
+      const ctx = { baseUrl: pathToFileURL(root).href, loader: { entries: () => [] } } as never
+      const manager = new ProfileManager({ ctx, dshBin: 'dsh', catalog: fakeCatalog() })
+      await manager.removePluginPauseOverrides([{ id: 'demo-a', name: 'demo-plugin-a' }])
+      const patch = await readFile(join(root, 'cordis.patch.yml'), 'utf8')
+      expect(patch).toContain('# preserve this profile comment')
+      expect(patch).toContain('unrelated-plugin')
+      expect(patch).not.toContain('demo-plugin-a')
     } finally {
       await rm(root, { recursive: true, force: true })
     }

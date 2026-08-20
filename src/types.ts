@@ -135,6 +135,7 @@ export type OperationWarning =
   | 'trusted-code'
   | 'restart-required'
   | 'scripts-disabled'
+  | 'canary-validation'
   | 'compatibility-unknown'
   | 'remove-data-kept'
   | 'self-removal'
@@ -155,6 +156,7 @@ export interface OperationPlan {
   readonly catalogId: string | null
   readonly packageName: string | null
   readonly currentVersion: string | null
+  readonly currentSpec: string | null
   readonly targetVersion: string | null
   readonly sourceSpec: string | null
   readonly artifactIntegrity: string | null
@@ -169,6 +171,9 @@ export interface OperationResult {
   readonly action: OperationAction | null
   readonly packageName: string | null
   readonly restartRequired: boolean
+  readonly activation: 'unchanged' | 'pending-restart' | 'unknown'
+  readonly canary: 'not-run' | 'passed' | 'failed'
+  readonly processCleanup: 'not-needed' | 'succeeded' | 'failed'
   readonly rollback: 'not-needed' | 'succeeded' | 'failed'
   readonly detail: string | null
   readonly installed: readonly InstalledPluginSummary[]

@@ -1,4 +1,4 @@
-import { C as VerificationState, S as UiLocale, _ as OperationPlanRequest, a as BootstrapResponse, b as RuntimeEntrySummary, c as CatalogPluginDetail, d as InstalledPluginDetail, f as InstalledPluginSummary, g as OperationPlan, h as OperationAction, i as ArtifactManifestSummary, l as CatalogPluginSummary, m as ManagerCapabilities, n as ApiSuccess, o as CatalogListRequest, p as InstalledState, r as ArtifactKind, s as CatalogListResponse, t as ApiFailure, u as CatalogStatus, v as OperationResult, x as RuntimePhase, y as OperationWarning } from "./types-CEotyhPd.js";
+import { C as VerificationState, S as UiLocale, _ as OperationPlanRequest, a as BootstrapResponse, b as RuntimeEntrySummary, c as CatalogPluginDetail, d as InstalledPluginDetail, f as InstalledPluginSummary, g as OperationPlan, h as OperationAction, i as ArtifactManifestSummary, l as CatalogPluginSummary, m as ManagerCapabilities, n as ApiSuccess, o as CatalogListRequest, p as InstalledState, r as ArtifactKind, s as CatalogListResponse, t as ApiFailure, u as CatalogStatus, v as OperationResult, x as RuntimePhase, y as OperationWarning } from "./types-DVDxrbK6.js";
 import z from "@deepseek-ai/schemastery";
 import { ProfileManifest } from "@deepseek-ai/dsh-app-boot";
 import { Context } from "@deepseek-ai/cordis";
@@ -68,6 +68,15 @@ interface PluginActivationTarget {
   readonly id: string;
   readonly name: string;
 }
+interface PluginConfigurationTarget {
+  readonly id: string;
+  readonly name: string | null;
+}
+interface PluginActivationDescriptor {
+  readonly targets: readonly PluginActivationTarget[];
+  readonly configurationTargets: readonly PluginConfigurationTarget[];
+  readonly configurationOnly: boolean;
+}
 interface ProfileManagerOptions {
   readonly ctx: Context;
   readonly profileDir?: string;
@@ -93,10 +102,34 @@ declare class ProfileManager {
   fingerprint(): string;
   list(locale?: UiLocale, checkUpdates?: boolean): Promise<readonly InstalledPluginSummary[]>;
   detail(packageName: string, locale?: UiLocale): Promise<InstalledPluginDetail | null>;
+  activationDescriptor(packageName: string): Promise<PluginActivationDescriptor>;
+  activationTargets(packageName: string): Promise<readonly PluginActivationTarget[]>;
   setPluginPaused(packageName: string, paused: boolean): Promise<readonly PluginActivationTarget[]>;
+  /** Remove persisted pause overrides that target a package being uninstalled. */
+  removePluginPauseOverrides(targets: readonly PluginActivationTarget[]): Promise<void>;
   currentManifest(): Promise<ProfileManifest>;
   close(): Promise<void>;
 }
+//#endregion
+//#region src/canary.d.ts
+interface ActivationCanaryRequest {
+  readonly profileDir: string;
+  readonly profileName: string;
+  readonly dshBin: string;
+  readonly packageName: string;
+  readonly expectedVersion: string;
+  readonly targets: readonly PluginActivationTarget[];
+  readonly configurationTargets?: readonly PluginConfigurationTarget[];
+  readonly configurationOnly?: boolean;
+  readonly stabilityMs?: number;
+  readonly timeoutMs: number;
+}
+interface ActivationCanaryResult {
+  readonly status: 'passed' | 'failed';
+  readonly code: 'canary-passed' | 'canary-preparation-failed' | 'canary-start-failed' | 'canary-process-exited' | 'canary-timeout' | 'canary-target-failed' | 'canary-http-failed' | 'canary-shutdown-failed' | 'canary-cleanup-failed';
+  readonly detail: string | null;
+}
+declare function runActivationCanary(request: ActivationCanaryRequest): Promise<ActivationCanaryResult>;
 //#endregion
 //#region src/operations.d.ts
 interface CommandResult {
@@ -106,13 +139,17 @@ interface CommandResult {
   readonly output: string | null;
   readonly stdout?: string | null;
   readonly stdoutTruncated?: boolean;
+  readonly processCleanup?: boolean;
 }
 interface OperationOptions {
   readonly profile: ProfileManager;
   readonly catalog: PluginCatalog;
   readonly dshBin: string;
   readonly timeoutMs?: number;
+  readonly canaryTimeoutMs?: number;
   readonly runCommand?: (args: readonly string[], cwd: string, timeoutMs: number) => Promise<CommandResult>;
+  readonly probeActivation?: (request: ActivationCanaryRequest) => Promise<ActivationCanaryResult>;
+  readonly lockProfile?: (profileDir: string) => Promise<() => Promise<void>>;
   readonly now?: () => number;
 }
 /** Owns one mutation at a time and never exposes arbitrary package-manager args. */
@@ -120,8 +157,11 @@ declare class ProfileOperations {
   private readonly options;
   private readonly plans;
   private readonly runCommand;
+  private readonly probeActivation;
+  private readonly lockProfile;
   private readonly now;
   private readonly timeoutMs;
+  private readonly canaryTimeoutMs;
   private operation;
   private disposed;
   constructor(options: OperationOptions);
@@ -129,10 +169,13 @@ declare class ProfileOperations {
   plan(request: OperationPlanRequest): Promise<OperationPlan>;
   private storePlan;
   execute(planId: string): Promise<OperationResult>;
+  private profileFiles;
   private prepareAndRun;
   private planStillTargetsCurrentState;
   private runPlan;
+  private runIsolatedActivation;
   private rollbackActivation;
+  private rollbackStateMatches;
   private rollback;
   private prunePlans;
   close(): Promise<void>;
@@ -148,6 +191,7 @@ interface Config {
   readonly maxCatalogBytes: number;
   readonly maxReadmeBytes: number;
   readonly operationTimeoutMs: number;
+  readonly canaryTimeoutMs: number;
   readonly dshBin: string;
 }
 declare const Config: z<Config>;
@@ -160,5 +204,5 @@ declare const _default: {
   Config: z<Config>;
 };
 //#endregion
-export { ApiFailure, ApiSuccess, ArtifactKind, ArtifactManifestSummary, BootstrapResponse, CatalogListRequest, CatalogListResponse, CatalogPluginDetail, CatalogPluginSummary, CatalogStatus, Config, InstalledPluginDetail, InstalledPluginSummary, InstalledState, ManagerCapabilities, OperationAction, OperationPlan, OperationPlanRequest, OperationResult, OperationWarning, PluginCatalog, ProfileManager, ProfileOperations, RuntimeEntrySummary, RuntimePhase, UiLocale, VerificationState, apply, _default as default, inject, name, parseCatalogText, queryCatalog };
+export { ApiFailure, ApiSuccess, ArtifactKind, ArtifactManifestSummary, BootstrapResponse, CatalogListRequest, CatalogListResponse, CatalogPluginDetail, CatalogPluginSummary, CatalogStatus, Config, InstalledPluginDetail, InstalledPluginSummary, InstalledState, ManagerCapabilities, OperationAction, OperationPlan, OperationPlanRequest, OperationResult, OperationWarning, PluginCatalog, ProfileManager, ProfileOperations, RuntimeEntrySummary, RuntimePhase, UiLocale, VerificationState, apply, _default as default, inject, name, parseCatalogText, queryCatalog, runActivationCanary };
 //# sourceMappingURL=index.d.ts.map

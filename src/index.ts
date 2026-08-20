@@ -27,6 +27,7 @@ export type * from './types.ts'
 export { PluginCatalog, parseCatalogText, queryCatalog } from './catalog.ts'
 export { ProfileManager } from './profile.ts'
 export { ProfileOperations } from './operations.ts'
+export { runActivationCanary } from './canary.ts'
 
 export const name = 'plugin-console'
 export const inject = ['webServer', 'loader']
@@ -38,6 +39,7 @@ export interface Config {
   readonly maxCatalogBytes: number
   readonly maxReadmeBytes: number
   readonly operationTimeoutMs: number
+  readonly canaryTimeoutMs: number
   readonly dshBin: string
 }
 
@@ -48,6 +50,7 @@ export const Config: z<Config> = z.object({
   maxCatalogBytes: z.natural().min(1_024).default(5_000_000),
   maxReadmeBytes: z.natural().min(1_024).default(262_144),
   operationTimeoutMs: z.natural().min(10_000).default(300_000),
+  canaryTimeoutMs: z.natural().min(5_000).default(60_000),
   dshBin: z.string().default('dsh'),
 })
 
@@ -208,6 +211,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     catalog,
     dshBin: config.dshBin,
     timeoutMs: config.operationTimeoutMs,
+    canaryTimeoutMs: config.canaryTimeoutMs,
   })
 
   const disposeRoute = ctx.webServer.register({

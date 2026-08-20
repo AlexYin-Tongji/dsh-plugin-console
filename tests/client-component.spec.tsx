@@ -100,6 +100,115 @@ describe('plugin manager client', () => {
     expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull()
   })
 
+  it('reports a successful isolated canary after installation', async () => {
+    const plan = {
+      status: 'ready', planId: 'canary-plan-123456789', blockReason: null, action: 'install', profileName: 'web',
+      catalogId: 'acme/demo', packageName: 'demo-plugin', currentVersion: null, targetVersion: '1.0.0',
+      sourceSpec: 'demo-plugin@1.0.0', artifactIntegrity: null, lifecycleScripts: [],
+      warnings: ['canary-validation'], expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    } as const
+    const api = {
+      bootstrap: async () => ({ catalog, installed: [], capabilities }),
+      listCatalog: async () => catalog,
+      refreshCatalog: async () => catalog,
+      catalogDetail: async () => null,
+      installed: async () => [],
+      installedDetail: async () => null,
+      capabilities: async () => capabilities,
+      plan: async () => plan,
+      execute: async () => ({
+        status: 'succeeded', code: 'succeeded', action: 'install', packageName: 'demo-plugin',
+        restartRequired: true, canary: 'passed', rollback: 'not-needed', detail: null,
+        installed: [], capabilities,
+      }),
+    }
+    render(<PluginManageSettingsTab {...({ api, locale: () => 'en', t } as any)} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Install' }))
+    expect(await screen.findByText(/isolated temporary profile/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    expect(await screen.findByText(/passed an isolated profile canary/)).toBeTruthy()
+  })
+
+  it('explains that removal needs a Host restart and browser refresh', async () => {
+    const installed = [{
+      packageName: 'demo-plugin', requestedSpec: '1.0.0', version: '1.0.0', description: 'Demo',
+      author: null, license: 'MIT', homepage: null, repositoryUrl: 'https://github.com/acme/demo',
+      system: false, directDependency: true, bundle: true, client: true,
+      activeAtLaunch: true, activeAfterRestart: true, state: 'active', runtimeEntries: [],
+      latestVersion: null, updateAvailable: false, updateCheckError: null, catalogId: 'acme/demo',
+    }] as const
+    const plan = {
+      status: 'ready', planId: 'remove-plan-123456789', blockReason: null, action: 'remove', profileName: 'web',
+      catalogId: 'acme/demo', packageName: 'demo-plugin', currentVersion: '1.0.0', currentSpec: '1.0.0',
+      targetVersion: null, sourceSpec: null, artifactIntegrity: null, lifecycleScripts: [],
+      warnings: ['remove-data-kept'], expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    } as const
+    const api = {
+      bootstrap: async () => ({ catalog, installed, capabilities }),
+      listCatalog: async () => catalog,
+      refreshCatalog: async () => catalog,
+      catalogDetail: async () => null,
+      installed: async () => installed,
+      installedDetail: async () => null,
+      capabilities: async () => capabilities,
+      plan: async () => plan,
+      execute: async () => ({
+        status: 'succeeded', code: 'succeeded', action: 'remove', packageName: 'demo-plugin',
+        restartRequired: true, activation: 'pending-restart', canary: 'not-run', processCleanup: 'not-needed',
+        rollback: 'not-needed', detail: null, installed: [], capabilities,
+      }),
+    }
+    render(<PluginManageSettingsTab {...({ api, locale: () => 'en', t } as any)} />)
+    fireEvent.click(await screen.findByRole('button', { name: /Installed/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove plugin' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm' }))
+    expect(await screen.findByText(/stop and restart DSH, then refresh the page/)).toBeTruthy()
+  })
+
+  it('never applies an available update until the user reviews, acknowledges, and confirms it', async () => {
+    const installed = [{
+      packageName: 'demo-plugin', requestedSpec: '1.0.0', version: '1.0.0', description: 'Demo',
+      author: null, license: 'MIT', homepage: null, repositoryUrl: 'https://github.com/acme/demo',
+      system: false, directDependency: true, bundle: true, client: true,
+      activeAtLaunch: true, activeAfterRestart: true, state: 'active', runtimeEntries: [],
+      latestVersion: '2.0.0', updateAvailable: true, updateCheckError: null, catalogId: 'acme/demo',
+    }] as const
+    const plan = {
+      status: 'ready', planId: 'update-plan-123456789', blockReason: null, action: 'update', profileName: 'web',
+      catalogId: 'acme/demo', packageName: 'demo-plugin', currentVersion: '1.0.0', currentSpec: '1.0.0',
+      targetVersion: '2.0.0', sourceSpec: 'demo-plugin@2.0.0', artifactIntegrity: null, lifecycleScripts: [],
+      warnings: ['trusted-code', 'restart-required', 'scripts-disabled', 'canary-validation'],
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    } as const
+    const execute = vi.fn(async () => ({
+      status: 'succeeded', code: 'succeeded', action: 'update', packageName: 'demo-plugin',
+      restartRequired: true, activation: 'pending-restart', canary: 'passed', processCleanup: 'succeeded',
+      rollback: 'not-needed', detail: null, installed, capabilities,
+    }))
+    const api = {
+      bootstrap: async () => ({ catalog, installed, capabilities }),
+      listCatalog: async () => catalog,
+      refreshCatalog: async () => catalog,
+      catalogDetail: async () => null,
+      installed: async () => installed,
+      installedDetail: async () => null,
+      capabilities: async () => capabilities,
+      plan: async () => plan,
+      execute,
+    }
+    render(<PluginManageSettingsTab {...({ api, locale: () => 'en', t } as any)} />)
+    fireEvent.click(await screen.findByRole('button', { name: /Installed/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Update plugin' }))
+    const confirm = await screen.findByRole('button', { name: 'Confirm' })
+    expect((confirm as HTMLButtonElement).disabled).toBe(true)
+    expect(execute).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('checkbox'))
+    expect((confirm as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(confirm)
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(1))
+  })
+
   it('offers pause for an active external plugin', async () => {
     const installed = [{
       packageName: 'demo-plugin', requestedSpec: '1.0.0', version: '1.0.0', description: 'Demo',

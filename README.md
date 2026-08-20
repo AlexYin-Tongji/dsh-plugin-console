@@ -12,11 +12,12 @@
 - **安装前验证**：npm 包检查合法 SemVer、repository、HTTPS tarball、SHA-512 integrity、`dsh.bundle.patch` 和生命周期脚本；GitHub 包固定到 40 位 commit，并确认 `package.json` 与声明的 patch 文件存在。
 - **已安装清单**：读取当前 profile 的 direct dependencies、bundle 顺序、解析后的 package manifest、Loader entry/Fiber phase 和 Web client 能力。
 - **使用说明**：读取 Markdown、MDX、RST、TXT 和无扩展名 README；Markdown 使用 README 专用的 GFM + 安全 HTML renderer，支持常见段落、链接、徽章和相对图片，所有文档都可切换到保留原文的源码视图。
-- **快捷更新**：社区目录中的包按已验证 artifact 更新；目录外 npm 包只有在同名、同 repository、合法升级版本和 integrity 都成立时才可更新，并在确认页单独警告。
-- **快捷删除**：只允许删除 direct dependency，系统 bundle 受保护；删除包不会擅自删除包创建的数据。
+- **快捷更新**：不会自动安装或更新。发现新版本后只显示更新按钮；用户点击后仍需复核目标版本和来源、勾选确认并再次点击“确认执行”。社区目录中的包按已验证 artifact 更新；目录外 npm 包只有在同名、同 repository、合法升级版本和 integrity 都成立时才可更新，并在确认页单独警告。
+- **快捷删除**：只允许删除 direct dependency，系统 bundle 受保护；删除会同时清理 `dsh.profile.bundles` 中的对应层，确保下次启动不再加载已删除插件；删除包不会擅自删除包创建的数据。
 - **暂停使用**：保留已安装依赖，通过 profile 的结构化 Loader patch 持久化 `disabled` 状态；可随时恢复，管理器自身不会允许自暂停。
-- **变更确认**：所有写操作先生成 5 分钟有效的 plan；执行前重新校验 profile 指纹、当前包状态和 artifact integrity，同一时间只允许一个变更。元数据实际变化后才清理 profile `node_modules` 并按恢复后的 lockfile 做 frozen reinstall，供应链策略在命令开始前拒绝时不会破坏现有依赖。
-- **重启提示**：变更由 pnpm/profile manifest 持久化，当前 Loader 不会被伪装成已更新，页面会明确显示重启后生效。
+- **隔离试运行**：安装或更新后，在临时 `DSH_HOME`、随机本地端口和隔离 HOME/TMP 中启动完整 Web profile；已安装的其他第三方 bundle 也会一起启动，因此插件间、插件与 DSH/Cordis 的初始化冲突会在新版本写入前被发现。目标 bundle 的 Loader 条目、精确包版本、客户端 bundle 的语法／执行／唯一包名注册／模块依赖和 HTTP 资源全部通过后才保留新版，否则自动恢复旧版本。浏览器内 UI 交互仍由用户在重启刷新后人工确认。
+- **变更确认**：所有写操作先生成 5 分钟有效的 plan；执行前重新校验 profile 指纹、当前包状态和 artifact integrity，同一时间只允许一个变更。元数据实际变化后才按恢复后的 lockfile 做 frozen reinstall，不会先删除整个 `node_modules`；供应链策略在命令开始前拒绝时不会破坏现有依赖。
+- **重启提示**：变更由 pnpm/profile manifest 持久化，当前 Loader 不会被伪装成已更新，页面会明确显示隔离试运行结果和重启后生效状态。
 
 ## 安装
 
@@ -51,6 +52,7 @@ bundle 默认配置位于 `cordis.patch.yml`。可在 profile 的 `cordis.patch.
     maxCatalogBytes: 5000000
     maxReadmeBytes: 262144
     operationTimeoutMs: 300000
+    canaryTimeoutMs: 60000
     dshBin: dsh
 ```
 
@@ -70,10 +72,11 @@ DSH 插件是 Host 进程中的受信任代码，不是隔离的浏览器扩展�
 3. 子进程使用参数数组和 `shell: false` 调用 `dsh plugin`。
 4. 安装、更新固定传 `--ignore-scripts`；需要构建脚本的包不会被静默放行。
 5. GitHub 来源必须固定到 commit；npm 来源使用精确版本，并在安装后核对 lockfile integrity。
-6. pnpm 成功后还会运行 `dsh --profile <name> --dump-config`；版本、bundle、integrity 或 composition 任一不匹配都视为失败并进入恢复。
-7. API 仅接受同源 POST；变更请求还必须来自 loopback。profile 路径从 Loader `baseUrl` 推导并限制在 `$DSH_HOME/profiles` 下。
-8. README 使用独立的不可信内容 renderer；raw HTML 只允许安全标签和协议，事件属性、脚本、iframe、危险 URL 会被清理，非 Markdown 和源码模式只展示纯文本。
-9. 删除只改变 package-manager/profile 状态，不清理未知的插件数据目录。
+6. pnpm 成功后还会运行 composition 校验与隔离启动 canary；完整 profile 的启动、精确版本、bundle、integrity、目标 Loader entry、客户端 bundle 协议或 HTTP 任一不匹配都视为失败并进入恢复。
+7. canary 会实际执行新版及其现有依赖的第三方代码以发现初始化崩溃；临时 DSH/HOME/TMP 隔离常规数据路径，但不是操作系统安全沙箱，插件仍属于受信任代码边界。
+8. API 仅接受同源 POST；变更请求还必须来自 loopback。profile 路径从 Loader `baseUrl` 推导并限制在 `$DSH_HOME/profiles` 下。
+9. README 使用独立的不可信内容 renderer；raw HTML 只允许安全标签和协议，事件属性、脚本、iframe、危险 URL 会被清理，非 Markdown 和源码模式只展示纯文本。
+10. 删除只改变 package-manager/profile 状态，不清理未知的插件数据目录；清理 Bundle 配置或组合失败会恢复删除前的 profile。
 
 “已验证”只表示 manifest 和 artifact 结构符合 DSH 安装约定，不表示作者或代码经过安全背书。
 
