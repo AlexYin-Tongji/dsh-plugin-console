@@ -20,25 +20,44 @@
 - **重启提示**：变更由 pnpm/profile manifest 持久化，当前 Loader 不会被伪装成已更新，页面会明确显示隔离试运行结果和重启后生效状态。
 - **DSH 一键更新**：左侧边栏底部新增 Harness 更新入口，图标常显当前版本，有更新时显示待更新版本角标；点开面板可查看运行中/已安装/最新版本与更新通道（`latest`/`next` 全部通道取最高版本，如 rc 系列中 `latest` 落后于 `next` 时会直接显示 `next` 的更新），并可强制「重新检查」绕过缓存、一键更新 DeepSeek Harness 本体。更新只支持 npm 全局安装（自动解析运行中 dsh 可执行文件所属的 npm prefix）；执行时先精确校验新旧版本，再用新 Harness 在隔离副本中启动**完整 profile**——所有已安装插件的 Loader 条目、激活状态、client bundle 图与 HTTP 表面全部通过才接受，任何插件初始化失败都会自动重装旧版 Harness 并再次隔离验证；更新成功后运行中的 Host 保持旧版本，重启 DSH 后生效。
 
-## 安装
+## 安装与更新
 
 在 DSH 安装所在环境运行：
 
 ```sh
-# npm 发布版
-dsh plugin --profile web add dsh-plugin-console
+# npm 发布版（显式 @latest，重复执行即可升级到最新版）
+dsh plugin --profile web add dsh-plugin-console@latest
 
 # 本地源码检出目录
 dsh plugin --profile web add .
 ```
+
+### 升级到新版本
+
+已安装旧版时，重新执行不带版本号的 `add <包名>` **不会升级**：pnpm 会保留 profile 中已有的 `^x.y.z` 版本范围并报告 "Already up to date"。升级方式任选其一：
+
+```sh
+# 方式一：显式 @latest 重新解析最新版
+dsh plugin --profile web add dsh-plugin-console@latest
+```
+
+方式二：在插件管理页面一键自更新（0.2.2 起内置）——Settings → 插件管理 → 已安装 → dsh-plugin-console → 更新。
+
+无论哪种方式，更新完成后都需要重启 `dsh web` 并刷新浏览器：Web client module roster 在进程启动时扫描 profile 包，运行中的 Host 与已打开的页面仍持有旧的启动模块图。
+
+### 没有拿到最新版？
+
+1. 确认 registry 上的最新版本，并与 [GitHub Releases](https://github.com/AlexYin-Tongji/dsh-plugin-console/releases) 对比：
+   `npm view dsh-plugin-console version`
+   若输出落后于 Releases，通常是镜像源同步延迟或本地缓存——检查 `npm config get registry` / `pnpm config get registry`（官方源为 `https://registry.npmjs.org/`），或稍后重试。
+2. 确认 profile 实际安装的版本：查看 `$DSH_HOME/profiles/web/package.json` 的依赖声明与 `$DSH_HOME/profiles/web/node_modules/dsh-plugin-console/package.json` 的 `version` 字段。
+3. 若版本已是最新但界面仍是旧版，重启 `dsh web` 后强制刷新浏览器。
 
 验证 bundle 层：
 
 ```sh
 dsh --profile web --dump-config
 ```
-
-安装或更新插件后需要重启 `dsh web`，因为 Web client module roster 在进程启动时扫描 profile 包。
 
 ## 配置
 
