@@ -1,31 +1,28 @@
-# v0.3.0 Release Status
+# v0.3.1 Release Status
 
 Repository: https://github.com/AlexYin-Tongji/dsh-plugin-console
 
-Status: **released — `v0.3.0` tagged, CI and Release workflows green, `dsh-plugin-console@0.3.0` published to npm**
+Status: **released — `v0.3.1` tagged, CI and Release workflows green, `dsh-plugin-console@0.3.1` published to npm**
 
-`0.3.0` adds the core Harness self-update goal: a one-click DeepSeek Harness update entry in the sidebar, and a guarantee that a Harness update never crashes installed plugins.
+`0.3.1` is a documentation-only release: it ships the corrected upgrade instructions so npm and GitHub both serve current install/upgrade guidance. No Host or client code changes.
 
 ## What changed
 
-- **Sidebar entry**: `sidebar.footer.action` icon showing the running Harness version, an update-available badge, and a popover with running/installed/latest versions, the update channel, and the reviewed plan → confirm → execute flow; after success it shows the pending-restart state, after failure it reports the rollback outcome.
-- **Harness resolution**: the running `dsh` executable is resolved (PATH search + realpath) to its package root and npm global prefix (POSIX `<prefix>/lib/node_modules` and Windows `<prefix>/node_modules` layouts with the bin surface checked); pnpm-store and manual installs are detected and shown as unmanaged.
-- **Update source**: the highest valid SemVer across ALL npm dist-tags (`latest`/`next`/…, channel reported); the target is an exact `@deepseek-ai/dsh` version installed with `npm install --global --prefix`. The status API supports a forced refresh so the sidebar "check again" bypasses the cache immediately.
-- **Safety**: before mutation the full composition is snapshotted from `--dump-config` (`!!js` expressions evaluated locally); after mutation the exact package version and `dsh --version` output are verified; then the complete composed profile boots in an isolated home under the NEW Harness binary — every installed plugin's Loader entry (activation, disabled flag, missing services), client module graph row, client bundle execution, and the HTTP surface are validated. Runtime-only boot entries are tolerated; any failure reinstalls the previous Harness version and re-verifies it with a second canary.
-- **Concurrency**: Harness updates share the profile busy gate and take a dedicated cross-process lock under `$DSH_HOME`.
+- **README**: the install command now pins `@latest` (`dsh plugin --profile web add dsh-plugin-console@latest`), so fresh installs always resolve the newest release at install time, and re-running the command upgrades an existing profile.
+- **Upgrade path documented**: re-running the bare install command `add dsh-plugin-console` does not upgrade — pnpm keeps the already-pinned `^x.y.z` range and reports "Already up to date". The documented upgrade paths are `add dsh-plugin-console@latest` or the built-in one-click self-update (Settings → Plugin manager → Installed), followed by a restart.
+- **Troubleshooting section**: registry/mirror sync lag, pinned profile versions vs installed versions, and missing restart/refresh after updates.
+- **RELEASING.md**: hardcoded example versions replaced with `<version>` placeholders; post-publish verification steps added (npm dist-tags plus a fresh-install resolution check).
 
 ## Verification
 
-- Strict TypeScript checking passes.
-- Host and browser client bundles build successfully.
-- All 109 tests pass across 15 test files: new coverage includes Harness resolution (managed/unmanaged/unresolved/PATH), registry lookup and caching, plan blocking states, execute success, canary-failure rollback, half-applied-command rollback, no-op rollback, plan expiry, fingerprint and version-change rejection, full-profile canary pass/fail (missing entry, crashing plugin, pause overrides, missing client), the sidebar component flows, and the updated client artifact contract.
-- Real DSH integration: the full-profile canary passes against the **active local web profile** (133 composed Loader entries, `dsh-plugin-console` and `dsh-ui-enhancer` client bundles) without touching its metadata or dependency tree.
-- Live resolution sanity check on this machine: `dsh` → npm global prefix under nvm, `0.1.0-rc.6` installed, `0.1.0-rc.7` available on `latest` → `updateAvailable: true`.
+- Strict TypeScript checking passes; Host and client bundles build; all 110 tests pass across 15 test files.
+- Upgrade behavior reproduced in a disposable `$DSH_HOME`: bare re-add of a profile pinned at `^0.2.2` reports "Already up to date" and stays on 0.2.2; explicit `add dsh-plugin-console@latest` upgrades to 0.3.x and rewrites the range.
+- Published tarball contents verified to match the local build before tagging.
 
 ## Release Completed
 
-- `2ac8991 release: v0.3.0` pushed to `main`; annotated tag `v0.3.0` pushed.
-- CI (`verify`) and Release (`publish`) workflows both green.
-- `dsh-plugin-console@0.3.0` is the npm `latest` dist-tag.
+- `release: v0.3.1` pushed to `main`; annotated tag `v0.3.1` pushed.
+- CI (`verify`) and Release (`publish`) workflows green.
+- `dsh-plugin-console@0.3.1` is the npm `latest` dist-tag; a scratch-directory fresh install resolves it.
 
-Follow-up: optionally exercise the real update write on a disposable machine (the local suite verifies every step except the final `npm install --global` write, which was validated against stubbed npm plus the real isolated canary).
+Follow-up: the awesome-dsh-plugin catalog entry still lists the unpinned install command (`dsh plugin --profile web add dsh-plugin-console`); consider upstreaming an `@latest` variant so catalog installs self-upgrade too.

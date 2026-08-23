@@ -2,12 +2,14 @@
 
 All notable changes to DSH Plugin Console are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.1] - 2026-08-23
 
 ### Changed
 
-- README: renamed the install section to 安装与更新 and documented the real upgrade path — re-running the bare install command `dsh plugin --profile web add dsh-plugin-console` does not upgrade an existing profile because pnpm keeps the already-pinned `^x.y.z` range ("Already up to date"); the documented upgrade commands are `add dsh-plugin-console@latest` or the built-in one-click self-update, followed by a restart. Added a troubleshooting section for registry mirrors, cache lag, pinned profile versions, and missing restarts.
+- README: renamed the install section to 安装与更新 and documented the real upgrade path — re-running the bare install command `dsh plugin --profile web add dsh-plugin-console` does not upgrade an existing profile because pnpm keeps the already-pinned `^x.y.z` range ("Already up to date"); the documented upgrade commands are `add dsh-plugin-console@latest` or the built-in one-click self-update, followed by a restart. Added a troubleshooting section for registry mirrors, cache lag, pinned profile versions, and missing restarts. The install command now pins `@latest`, so fresh installs always resolve the newest release at install time.
 - `docs/RELEASING.md`: replaced hardcoded example versions with `<version>` placeholders and added post-publish verification steps (npm dist-tags plus a fresh-install resolution check).
+
+No Host/client code changes in this release; it ships the corrected documentation so npm and GitHub both serve current upgrade instructions.
 
 ## [0.3.0] - 2026-08-20
 
