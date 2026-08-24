@@ -135,7 +135,7 @@
     "remark-gfm": "^4.0.1",
     "tsdown": "^0.15.12",
     "typescript": "^5.8.0",
-    "vitest": "^3.2.0",
+    "vitest": "^4.1.11",
     "@deepseek-ai/dsh-client-ui-sidebar": "^0.1.0-rc.6"
   }
 }
