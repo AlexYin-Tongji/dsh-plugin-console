@@ -95,10 +95,16 @@ declare class ProfileManager {
   private readonly maxReadmeBytes;
   private readonly fetchImpl;
   private readonly latestCache;
+  private capabilitiesCache;
   private busy;
   constructor(options: ProfileManagerOptions);
   get isBusy(): boolean;
   setBusy(value: boolean): void;
+  /**
+   * Writability and tool availability change rarely, so the expensive probes
+   * (filesystem access plus `dsh`/`pnpm --version` subprocesses) are cached
+   * briefly; only `busy` is live, because it flips with every operation.
+   */
   capabilities(): Promise<ManagerCapabilities>;
   fingerprint(): string;
   list(locale?: UiLocale, checkUpdates?: boolean): Promise<readonly InstalledPluginSummary[]>;
@@ -224,6 +230,7 @@ declare class HarnessManager {
   private readonly fetchImpl;
   private readonly now;
   private readonly distTagsCache;
+  private distTagsInflight;
   private static readonly CACHE_KEY;
   constructor(options: HarnessManagerOptions);
   /** Resolve the installation the configured dsh binary belongs to. */
@@ -232,9 +239,11 @@ declare class HarnessManager {
    * All npm dist-tags of the Harness package. The newest valid semver across
    * every channel is the update candidate — the registry keeps `latest` one
    * release behind `next` during the rc series, and the updater must follow
-   * the highest available version instead of a single channel.
+   * the highest available version instead of a single channel. Concurrent
+   * callers (background warm-up plus explicit polls) share one lookup.
    */
   private distTags;
+  private fetchDistTags;
   /** Read the package version currently installed at a package root. */
   installedVersionAt(installRoot: string): Promise<string | null>;
   /**
@@ -245,6 +254,14 @@ declare class HarnessManager {
    * immediately.
    */
   status(currentVersion: string | null, refresh?: boolean): Promise<HarnessStatus>;
+  /**
+   * Non-blocking projection for first paint: serves the last known dist-tags
+   * snapshot (an expired snapshot included) and revalidates in the background,
+   * so a slow registry lookup never delays the response. The next explicit
+   * `status` poll observes the refreshed document.
+   */
+  cachedStatus(currentVersion: string | null): Promise<HarnessStatus>;
+  private project;
   close(): Promise<void>;
 }
 //#endregion

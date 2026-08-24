@@ -18,7 +18,6 @@ import { HarnessOperations } from './harness-operations.ts'
 import { ProfileManager } from './profile.ts'
 import { ProfileOperations } from './operations.ts'
 import type {
-  BootstrapResponse,
   CatalogListRequest,
   OperationPlanRequest,
   UiLocale,
@@ -62,6 +61,8 @@ export const Config: z<Config> = z.object({
 
 const API_PATH = '/api/plugin-console'
 const MAX_BODY_BYTES = 64 * 1024
+/** Longest a cold (never-cached) catalog seed may delay the first panel paint. */
+const BOOTSTRAP_SEED_WAIT_MS = 3_500
 
 class ApiFailure extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -250,14 +251,34 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         switch (method) {
           case 'bootstrap': {
             const request = listRequest(params)
-            if (catalog.status().state === 'unavailable' || catalog.status().stale) await catalog.refresh()
-            const response: BootstrapResponse = {
-              catalog: catalog.list(request),
-              installed: await manager.list(locale(isRecord(params) ? params.locale : undefined)),
-              capabilities: await manager.capabilities(),
-              harness: await harness.status(runningVersion),
+            const bootstrapLocale = locale(isRecord(params) ? params.locale : undefined)
+            // First paint never waits on the network. A cached catalog is
+            // served immediately while a stale one revalidates in the
+            // background (later catalog/list calls observe the result); only
+            // a cold catalog with nothing to show briefly awaits its seed.
+            const status = catalog.status()
+            if (status.state === 'unavailable') {
+              await Promise.race([
+                catalog.refresh(),
+                new Promise<void>(resolve => { setTimeout(resolve, BOOTSTRAP_SEED_WAIT_MS).unref() }),
+              ])
+            } else if (status.stale) {
+              void catalog.refresh()
             }
-            value = response
+            // Installed rows skip per-plugin registry checks here; the client
+            // fills update badges in progressively via installed/list, whose
+            // results are cached, so repeated panel entries stay instant.
+            const [installed, managerCapabilities, harnessStatus] = await Promise.all([
+              manager.list(bootstrapLocale, false),
+              manager.capabilities(),
+              harness.cachedStatus(runningVersion),
+            ])
+            value = {
+              catalog: catalog.list(request),
+              installed,
+              capabilities: managerCapabilities,
+              harness: harnessStatus,
+            }
             break
           }
           case 'catalog/list': value = catalog.list(listRequest(params)); break

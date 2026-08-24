@@ -92,6 +92,46 @@ describe('harness manager', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 
+  it('answers cachedStatus without waiting for a stalled registry and reuses the warmed document', async () => {
+    const { executable } = await fixtureInstallation()
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const fetchImpl = vi.fn(async () => {
+      await gate
+      return new Response(JSON.stringify({ latest: '0.1.0-rc.7', next: '0.1.0-rc.8' }), { status: 200 })
+    }) as unknown as typeof fetch
+    const manager = new HarnessManager({ dshBin: executable, fetchImpl })
+    // The registry lookup never settles inside this block; cachedStatus must
+    // still answer from local state while the warm-up runs in the background.
+    const preview = await manager.cachedStatus('0.1.0-rc.6')
+    expect(preview.latestVersion).toBeNull()
+    expect(preview.updateAvailable).toBe(false)
+    expect(preview.managed).toBe(true)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    release()
+    const status = await manager.status('0.1.0-rc.6')
+    expect(status.latestVersion).toBe('0.1.0-rc.8')
+    expect(status.updateAvailable).toBe(true)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('shares one in-flight dist-tag lookup between concurrent callers', async () => {
+    const { executable } = await fixtureInstallation()
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const fetchImpl = vi.fn(async () => {
+      await gate
+      return new Response(JSON.stringify({ latest: '0.1.0-rc.7' }), { status: 200 })
+    }) as unknown as typeof fetch
+    const manager = new HarnessManager({ dshBin: executable, fetchImpl })
+    const pending = Promise.all([manager.status('0.1.0-rc.6'), manager.status('0.1.0-rc.6')])
+    release()
+    const [left, right] = await pending
+    expect(left.latestVersion).toBe('0.1.0-rc.7')
+    expect(right.latestVersion).toBe('0.1.0-rc.7')
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
   it('marks a non-prefix package tree as unmanaged with a message', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-plugin-console-harness-standalone-'))
     roots.push(root)

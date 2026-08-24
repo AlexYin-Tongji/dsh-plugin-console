@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, chmod, readFile, rm, writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -108,6 +108,33 @@ describe('profile projection', () => {
       const ctx = { baseUrl: pathToFileURL(root).href, loader: { entries: () => [] } } as never
       const manager = new ProfileManager({ ctx, dshBin: 'missing-dsh-test-command', catalog: fakeCatalog() })
       expect((await manager.capabilities()).profileWritable).toBe(true)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('caches capability probes briefly so repeated bootstraps do not re-spawn commands', async () => {
+    const root = await mkdtemp(join('/tmp', 'dsh-plugin-console-capabilities-'))
+    try {
+      await writeFile(join(root, 'package.json'), JSON.stringify({
+        name: 'dsh-profile-test',
+        dependencies: {},
+        dsh: { profile: { bundles: [] } },
+      }))
+      const counter = join(root, 'probes.log')
+      const probe = join(root, 'probe.sh')
+      await writeFile(probe, `#!/bin/sh\necho x >> '${counter}'\n`, { encoding: 'utf8' })
+      await chmod(probe, 0o755)
+      const ctx = { baseUrl: pathToFileURL(root).href, loader: { entries: () => [] } } as never
+      const manager = new ProfileManager({ ctx, dshBin: probe, catalog: fakeCatalog() })
+      expect((await manager.capabilities()).dshAvailable).toBe(true)
+      expect((await manager.capabilities()).dshAvailable).toBe(true)
+      manager.setBusy(true)
+      // The busy flag stays live even while the probe results are cached.
+      expect((await manager.capabilities()).busy).toBe(true)
+      manager.setBusy(false)
+      const spawns = (await readFile(counter, 'utf8')).trim().split('\n')
+      expect(spawns).toHaveLength(1)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

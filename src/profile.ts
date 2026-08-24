@@ -30,6 +30,7 @@ const MAX_PACKAGE_JSON_BYTES = 512_000
 const NPM_TIMEOUT_MS = 8_000
 const MAX_NPM_METADATA_BYTES = 128_000
 const NPM_CACHE_MS = 5 * 60 * 1000
+const CAPABILITIES_CACHE_MS = 30_000
 const MAX_PROFILE_PATCH_BYTES = 1_000_000
 const LIFECYCLE_SCRIPT_NAMES = ['preinstall', 'install', 'postinstall', 'prepare'] as const
 const README_NAMES: Record<UiLocale, readonly string[]> = {
@@ -442,6 +443,7 @@ export class ProfileManager {
   private readonly maxReadmeBytes: number
   private readonly fetchImpl: typeof fetch
   private readonly latestCache = new Map<string, { readonly expiresAt: number; readonly value: { readonly version: string | null; readonly error: string | null } }>()
+  private capabilitiesCache: { readonly expiresAt: number; readonly value: Omit<ManagerCapabilities, 'busy'> } | null = null
   private busy = false
 
   constructor(options: ProfileManagerOptions) {
@@ -468,7 +470,14 @@ export class ProfileManager {
     this.busy = value
   }
 
+  /**
+   * Writability and tool availability change rarely, so the expensive probes
+   * (filesystem access plus `dsh`/`pnpm --version` subprocesses) are cached
+   * briefly; only `busy` is live, because it flips with every operation.
+   */
   async capabilities(): Promise<ManagerCapabilities> {
+    const cached = this.capabilitiesCache
+    if (cached !== null && cached.expiresAt > Date.now()) return { ...cached.value, busy: this.busy }
     const profileWritable = await Promise.all([
       writable(this.runtime.dir),
       writableIfPresent(join(this.runtime.dir, 'package.json')),
@@ -480,12 +489,11 @@ export class ProfileManager {
       commandAvailable(this.dshBin),
       commandAvailable('pnpm'),
     ])
-    return {
+    const value: Omit<ManagerCapabilities, 'busy'> = {
       profileName: this.runtime.profileName,
       profileWritable,
       dshAvailable,
       pnpmAvailable,
-      busy: this.busy,
       message: !profileWritable
         ? 'The active DSH profile is not writable.'
         : !dshAvailable
@@ -494,6 +502,8 @@ export class ProfileManager {
             ? 'Cannot execute pnpm; install pnpm or expose it on PATH.'
             : null,
     }
+    this.capabilitiesCache = { expiresAt: Date.now() + CAPABILITIES_CACHE_MS, value }
+    return { ...value, busy: this.busy }
   }
 
   fingerprint(): string {
@@ -715,6 +725,7 @@ export class ProfileManager {
 
   async close(): Promise<void> {
     this.latestCache.clear()
+    this.capabilitiesCache = null
   }
 }
 

@@ -184,6 +184,7 @@ export class HarnessManager {
   private readonly fetchImpl: typeof fetch
   private readonly now: () => number
   private readonly distTagsCache = new Map<string, { readonly expiresAt: number; readonly value: { readonly channels: readonly HarnessChannelVersion[]; readonly error: string | null } }>()
+  private distTagsInflight: Promise<{ readonly channels: readonly HarnessChannelVersion[]; readonly error: string | null }> | null = null
   private static readonly CACHE_KEY = 'dist-tags'
 
   constructor(options: HarnessManagerOptions) {
@@ -201,11 +202,21 @@ export class HarnessManager {
    * All npm dist-tags of the Harness package. The newest valid semver across
    * every channel is the update candidate — the registry keeps `latest` one
    * release behind `next` during the rc series, and the updater must follow
-   * the highest available version instead of a single channel.
+   * the highest available version instead of a single channel. Concurrent
+   * callers (background warm-up plus explicit polls) share one lookup.
    */
-  private async distTags(): Promise<{ channels: readonly HarnessChannelVersion[]; error: string | null }> {
+  private distTags(): Promise<{ readonly channels: readonly HarnessChannelVersion[]; readonly error: string | null }> {
     const cached = this.distTagsCache.get(HarnessManager.CACHE_KEY)
-    if (cached !== undefined && cached.expiresAt > this.now()) return cached.value
+    if (cached !== undefined && cached.expiresAt > this.now()) return Promise.resolve(cached.value)
+    if (this.distTagsInflight !== null) return this.distTagsInflight
+    const pending = this.fetchDistTags().finally(() => {
+      if (this.distTagsInflight === pending) this.distTagsInflight = null
+    })
+    this.distTagsInflight = pending
+    return pending
+  }
+
+  private async fetchDistTags(): Promise<{ channels: readonly HarnessChannelVersion[]; error: string | null }> {
     let value: { channels: readonly HarnessChannelVersion[]; error: string | null }
     try {
       const escaped = HARNESS_PACKAGE.replace('/', '%2F')
@@ -253,9 +264,34 @@ export class HarnessManager {
    * immediately.
    */
   async status(currentVersion: string | null, refresh = false): Promise<HarnessStatus> {
-    if (refresh) this.distTagsCache.delete(HarnessManager.CACHE_KEY)
+    if (refresh) {
+      // An explicit check-again must observe releases published after the
+      // in-flight background warm-up started, so bypass cache and dedup.
+      this.distTagsCache.delete(HarnessManager.CACHE_KEY)
+    }
     const installation = await this.resolve()
-    const tags = await this.distTags()
+    const tags = refresh ? await this.fetchDistTags() : await this.distTags()
+    return this.project(currentVersion, installation, tags)
+  }
+
+  /**
+   * Non-blocking projection for first paint: serves the last known dist-tags
+   * snapshot (an expired snapshot included) and revalidates in the background,
+   * so a slow registry lookup never delays the response. The next explicit
+   * `status` poll observes the refreshed document.
+   */
+  async cachedStatus(currentVersion: string | null): Promise<HarnessStatus> {
+    const installation = await this.resolve()
+    const entry = this.distTagsCache.get(HarnessManager.CACHE_KEY)
+    if (entry === undefined || entry.expiresAt <= this.now()) void this.distTags()
+    return this.project(currentVersion, installation, entry?.value ?? { channels: [], error: null })
+  }
+
+  private project(
+    currentVersion: string | null,
+    installation: HarnessInstallation,
+    tags: { readonly channels: readonly HarnessChannelVersion[]; readonly error: string | null },
+  ): HarnessStatus {
     const installedVersion = installation.status !== 'unresolved'
       ? installation.version
       : null

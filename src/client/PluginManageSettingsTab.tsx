@@ -60,8 +60,6 @@ interface LoadState {
   readonly message?: string
 }
 
-const DEFAULT_REQUEST: CatalogListRequest = { query: '', category: 'all', page: 1, pageSize: 24 }
-
 function languageOf(value: string): 'zh' | 'en' {
   return value.toLocaleLowerCase().startsWith('en') ? 'en' : 'zh'
 }
@@ -550,7 +548,10 @@ export function PluginManageSettingsTab({ api, locale, t }: PluginManageSettings
   const loadBootstrap = (): void => {
     const sequence = ++requestSequence.current
     setLoad({ status: 'loading' })
-    void api.bootstrap(DEFAULT_REQUEST, language).then((value: BootstrapResponse) => {
+    // The Host answers bootstrap from local state only (catalog cache, profile
+    // files, cached probes), so the panel paints instantly; update badges are
+    // filled in by the follow-up installed/list effect below.
+    void api.bootstrap(request, language).then((value: BootstrapResponse) => {
       if (!alive.current || sequence !== requestSequence.current) return
       setCatalog(value.catalog)
       setInstalled(value.installed)
@@ -575,6 +576,18 @@ export function PluginManageSettingsTab({ api, locale, t }: PluginManageSettings
     }, 180)
     return () => { live = false; clearTimeout(timer) }
   }, [category, load.status, page, query, request])
+
+  // Bootstrap rows skip per-plugin registry checks for a fast first paint;
+  // this follow-up fetch carries update availability and replaces the rows
+  // once it lands (each check is cached server-side, so re-entries stay fast).
+  useEffect(() => {
+    if (load.status !== 'ready') return
+    let live = true
+    void api.installed(language).then(value => {
+      if (live && alive.current) setInstalled(value)
+    }).catch(() => undefined)
+    return () => { live = false }
+  }, [api, language, load.status, reload])
 
   useEffect(() => {
     if (selection === null) { setDetail({ status: 'idle' }); return }

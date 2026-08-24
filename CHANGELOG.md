@@ -2,6 +2,19 @@
 
 All notable changes to DSH Plugin Console are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] - 2026-08-24
+
+### Changed
+
+- Opening the plugin manager (market tab) no longer waits on the network. The bootstrap response is now assembled from local state only: the last-known-good catalog cache paints immediately while a stale catalog revalidates in the background (only a cold, never-cached catalog briefly awaits its seed fetch, bounded to 3.5 s), and the catalog listing, installed projection, capability probes, and Harness status are computed concurrently instead of sequentially.
+- Installed-plugin update discovery moved off the critical path: bootstrap returns rows without per-plugin registry checks, and the client fills update badges in progressively via `installed/list` right after first paint. Each check stays cached (npm metadata 5 min, artifact inspection 10 min), so re-entering the panel is instant.
+- Harness dist-tag lookups gained a non-blocking projection (`cachedStatus`) that serves the last known snapshot — an expired one included — and revalidates in the background, so a slow registry can never delay the panel or sidebar first paint; concurrent lookups now share one in-flight request, while an explicit "check again" still forces a fresh document.
+- Capability probes (`dsh --version`, `pnpm --version`, profile writability) are cached for 30 s with only the live `busy` flag overlaid on reads, removing repeated subprocess spawns from every settings-tab mount.
+
+### Fixed
+
+- Bootstrap no longer serializes its four slow data sources behind one another, which could previously block the market tab for tens of seconds on slow routes to `registry.npmjs.org` / `api.github.com`.
+
 ## [0.3.1] - 2026-08-23
 
 ### Changed
